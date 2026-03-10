@@ -5,11 +5,11 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.pool import NullPool
 from app.config import get_settings
 from app.models.database import Base
+import logging
 
 settings = get_settings()
+logger = logging.getLogger("app.db")
 
-# NullPool is recommended for async + serverless deployments.
-# For long-lived servers, remove it to get connection pooling.
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=(settings.APP_ENV == "development"),
@@ -26,7 +26,13 @@ AsyncSessionLocal = async_sessionmaker(
 async def init_db():
     """Create all tables on startup (dev convenience)."""
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+        try:
+            await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+        except Exception as e:
+            if "already exists" in str(e):
+                logger.warning("Schema already exists (partial deploy), skipping: %s", e)
+            else:
+                raise
 
 
 async def get_db():
