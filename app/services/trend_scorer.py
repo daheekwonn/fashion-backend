@@ -134,16 +134,25 @@ async def _score_item(item: TrendItem) -> None:
         db_item.trend_score    = composite
         db_item.last_scored_at = datetime.now(timezone.utc)
 
-        # ── 7. Snapshot for time-series chart ────────────────────────────────
-        snapshot = TrendScore(
-            item_id      = db_item.id,
-            date         = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
-            runway_score = runway_score,
-            search_score = search_score,
-            social_score = social_score,
-            composite    = composite,
+        # — 7. Snapshot for time-series chart (upsert to avoid duplicate key)
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        stmt = pg_insert(TrendScore).values(
+            item_id    = db_item.id,
+            date       = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            runway_score  = runway_score,
+            search_score  = search_score,
+            social_score  = social_score,
+            composite     = composite,
+        ).on_conflict_do_update(
+            constraint="uq_score_item_date",
+            set_={
+                "runway_score":  runway_score,
+                "search_score":  search_score,
+                "social_score":  social_score,
+                "composite":     composite,
+            }
         )
-        session.add(snapshot)
+        await session.execute(stmt)
 
         # ── 8. Re-rank sub-items by runway_count ─────────────────────────────
         if db_item.sub_items:
