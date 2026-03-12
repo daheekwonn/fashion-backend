@@ -3,6 +3,7 @@ db/session.py — Async SQLAlchemy engine + session factory
 """
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
+from sqlalchemy import text
 from app.config import get_settings
 from app.models.database import Base
 import logging
@@ -24,15 +25,14 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def init_db():
-    """Create all tables on startup (dev convenience)."""
+    """Create all tables on startup, one at a time so partial failures don't block."""
     async with engine.begin() as conn:
-        try:
-            await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-        except Exception as e:
-            if "already exists" in str(e):
-                logger.warning("Schema already exists (partial deploy), skipping: %s", e)
-            else:
-                raise
+        for table in Base.metadata.sorted_tables:
+            try:
+                await conn.run_sync(table.create, checkfirst=True)
+                logger.info(f"Table ready: {table.name}")
+            except Exception as e:
+                logger.warning(f"Skipping table {table.name}: {e}")
 
 
 async def get_db():
