@@ -1,208 +1,256 @@
-"""
-services/search_trends.py
-─────────────────────────
-Pulls Google Trends data for fashion keywords using pytrends
-and stores it in the SearchSignal table.
+# app/services/search_trends.py
+#
+# Pulls Google Trends data for FW26 fashion keywords via pytrends.
+# Writes results into the SearchSignal table in Railway PostgreSQL.
+# Called by POST /api/trends/ingest/search
+#
+# pytrends has no API key — it scrapes Google Trends directly.
+# Rate limits apply: we batch keywords (max 5 per request) and add
+# delays between requests to avoid being blocked.
+#
+# Keywords are intentionally broad — we track trend CATEGORIES, not
+# specific runway pieces. "leather outerwear" captures bombers, bikers,
+# blazers, and motos from any show. This makes signals more durable
+# and avoids false negatives when terminology varies by brand.
 
-Limitations of pytrends:
-  - Unofficial library (scrapes Google Trends)
-  - Rate-limited — batch keywords in groups of 5 max
-  - Returns relative values (0–100), not absolute search volumes
-  - Use with backoff to avoid 429s
-"""
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from datetime import datetime, timezone
 
 from pytrends.request import TrendReq
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from tenacity import retry, stop_after_attempt, wait_exponential
+from pytrends.exceptions import ResponseError
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.models.database import SearchSignal, TrendItem
+from app.db.session import AsyncSessionLocal
+from app.models.database import SearchSignal
 
 logger = logging.getLogger(__name__)
 
-# Pytrends timeframe options:
-#   "today 3-m"  = last 90 days
-#   "today 12-m" = last 12 months
-#   "today 5-y"  = last 5 years
-DEFAULT_TIMEFRAME = "today 3-m"
-BATCH_SIZE = 5       # Google Trends max keywords per request
-REQUEST_DELAY = 2.0  # seconds between batches (avoid rate limiting)
 
+# ── FW26 keyword groups ────────────────────────────────────────────────────────
+# Rules:
+#   - Max 5 keywords per group (pytrends hard limit)
+#   - Keep terms broad enough to capture the category, not one specific piece
+#   - Each group is one HTTP request — related terms compare better within a group
+#   - Values are relative within a group (0-100), keep groups thematically tight
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Core pytrends fetch (sync — runs in thread pool)
-# ─────────────────────────────────────────────────────────────────────────────
+FW26_KEYWORD_GROUPS: list[list[str]] = [
 
-def _fetch_trends_sync(
-    keywords: List[str],
-    timeframe: str = DEFAULT_TIMEFRAME,
-    geo: str = "",
-) -> dict:
-    """
-    Synchronous pytrends call — call via asyncio.to_thread() to avoid
-    blocking the async event loop.
+    # Outerwear categories (not specific pieces)
+    # "leather outerwear" catches bombers, bikers, blazers, motos all at once
+    # "shearling" catches coats, vests, and liners
+    ["leather outerwear", "shearling coat", "oversized coat", "trench coat women", "fur coat trend"],
 
-    Returns dict: { "keyword": [(date, value), ...], ... }
-    """
-    pytrends = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
-    pytrends.build_payload(keywords, cat=185, timeframe=timeframe, geo=geo)
-    # cat=185 = "Shopping > Apparel" — scopes results to fashion searches
-    df = pytrends.interest_over_time()
+    # Dress silhouettes
+    # "prairie dress" and "cottage dress" both capture the romantic/rustic wave
+    # "column dress" and "slip dress" cover the minimal/sleek counter-signal
+    ["prairie dress", "cottage dress trend", "maxi dress 2026", "column dress", "slip dress outfit"],
 
-    result = {}
-    if df.empty:
-        return result
+    # Tailoring & trousers
+    ["wide leg trousers", "pleated trousers", "tailored suit women", "pinstripe trousers", "barrel leg jeans"],
 
-    for kw in keywords:
-        if kw not in df.columns:
-            continue
-        result[kw] = [
-            (row.Index.to_pydatetime(), float(row[kw]))
-            for row in df.itertuples()
-            if row.isPartial == False  # noqa: E712 — pytrends uses 0/1
-        ]
+    # Footwear
+    ["ballet flats outfit", "mary jane heels", "kitten heel shoes", "knee high boots", "loafers outfit women"],
 
-    return result
+    # Colour signals — spike when a shade dominates a season, strong leading indicator
+    ["burgundy outfit", "chocolate brown fashion", "ivory cream outfit", "forest green coat", "camel coat"],
 
+    # Bag & accessory categories
+    ["shoulder bag outfit", "oversized tote bag", "mini bag trend", "leather belt bag", "bucket bag fashion"],
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  DB persistence
-# ─────────────────────────────────────────────────────────────────────────────
+    # Show-level brand searches
+    # High velocity = the show broke through culturally, not just within industry
+    ["Chanel Fall 2026", "Dior Fall 2026", "Gucci Fall 2026", "Chloe Fall 2026", "Bottega Veneta 2026"],
 
-async def save_search_signals(
-    db: AsyncSession,
-    keyword: str,
-    data_points: list,
-    geo: str = "",
-) -> int:
-    """Upsert (keyword, date, geo) rows into search_signals."""
-    saved = 0
-    for date, value in data_points:
-        # Normalize to UTC date-only
-        if date.tzinfo is None:
-            date = date.replace(tzinfo=timezone.utc)
-        date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Material signals
+    ["velvet fashion", "boucle jacket", "satin dress trend", "lace fashion 2026", "knit dress outfit"],
 
-        result = await db.execute(
-            select(SearchSignal).where(
-                SearchSignal.keyword == keyword.lower(),
-                SearchSignal.date == date,
-                SearchSignal.geo == geo,
-            )
-        )
-        signal: Optional[SearchSignal] = result.scalar_one_or_none()
-
-        if signal is None:
-            signal = SearchSignal(keyword=keyword.lower(), date=date, geo=geo)
-            db.add(signal)
-
-        signal.value = value
-        saved += 1
-
-    return saved
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Batch ingestion pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def ingest_search_trends(
-    db: AsyncSession,
-    keywords: Optional[List[str]] = None,
-    season: Optional[str] = None,
-    timeframe: str = DEFAULT_TIMEFRAME,
-    geo: str = "",
-) -> dict:
-    """
-    Main entry point.
-
-    If keywords is None, loads them from the TrendItems table for the season.
-    Fetches Google Trends data in batches of 5 and stores in SearchSignal.
-
-    Usage:
-        # From the API endpoint:
-        await ingest_search_trends(db, season="FW26")
-
-        # Or with explicit keywords:
-        await ingest_search_trends(db, keywords=["linen", "gorpcore"])
-    """
-    # Load keywords from DB if not provided
-    if keywords is None:
-        if season is None:
-            raise ValueError("Provide either keywords or a season.")
-        result = await db.execute(
-            select(TrendItem.name).where(TrendItem.season == season)
-        )
-        keywords = [row[0] for row in result.all()]
-
-    if not keywords:
-        logger.warning("[SearchTrends] No keywords to fetch.")
-        return {"status": "no_keywords", "fetched": 0}
-
-    logger.info(f"[SearchTrends] Fetching trends for {len(keywords)} keywords")
-
-    total_saved = 0
-    errors = []
-
-    # Process in batches of BATCH_SIZE
-    for i in range(0, len(keywords), BATCH_SIZE):
-        batch = keywords[i : i + BATCH_SIZE]
-        logger.debug(f"[SearchTrends] Batch {i//BATCH_SIZE + 1}: {batch}")
-
-        try:
-            data = await asyncio.to_thread(
-                _fetch_trends_sync, batch, timeframe, geo
-            )
-        except Exception as e:
-            logger.error(f"[SearchTrends] Batch failed: {e}")
-            errors.append({"batch": batch, "error": str(e)})
-            await asyncio.sleep(REQUEST_DELAY * 3)
-            continue
-
-        for kw, points in data.items():
-            saved = await save_search_signals(db, kw, points, geo)
-            total_saved += saved
-            logger.debug(f"[SearchTrends] Saved {saved} points for '{kw}'")
-
-        await db.commit()
-        await asyncio.sleep(REQUEST_DELAY)  # rate limit protection
-
-    logger.info(f"[SearchTrends] Done — {total_saved} data points saved.")
-    return {
-        "status":  "ok",
-        "keywords": len(keywords),
-        "points_saved": total_saved,
-        "errors":  errors,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Convenience: fetch trends for specific fashion show keywords
-# ─────────────────────────────────────────────────────────────────────────────
-
-FW26_SEED_KEYWORDS = [
-    # Materials
-    "linen fashion", "organza dress", "denim jacket", "leather coat",
-    "velvet suit", "mesh top", "tweed jacket", "shearling coat",
-    # Silhouettes / styles
-    "quiet luxury", "gorpcore", "ballet core", "moto aesthetic",
-    "oversized blazer", "sculptural dress", "column silhouette",
-    # Colors
-    "sage green fashion", "ivory outfit", "cobalt blue dress",
-    # Accessories
-    "sculptural bag", "knee high boots", "statement belt",
+    # Aesthetic/mood searches (upstream signal — often leads runway by 1 season)
+    ["quiet luxury fashion", "romantic fashion aesthetic", "dark academia outfit", "coastal grandmother style", "balletcore outfit"],
 ]
 
+# Last 90 days captures the full FW26 show season and consumer reaction
+TIMEFRAME = "today 3-m"
+GEO = ""  # worldwide; swap to "US" or "GB" to narrow
 
-async def ingest_fw26_seed_keywords(db: AsyncSession) -> dict:
-    """Kick off search trend ingestion for known FW26 keywords."""
-    return await ingest_search_trends(
-        db,
-        keywords=FW26_SEED_KEYWORDS,
-        timeframe="today 3-m",
-        geo="",   # worldwide
+
+# ── Main ingest function ───────────────────────────────────────────────────────
+
+async def ingest_search_signals() -> dict:
+    """
+    Pull Google Trends data for all FW26 keyword groups and write
+    SearchSignal rows to the database. Returns a summary dict.
+
+    Called by: POST /api/trends/ingest/search
+    """
+    pt = TrendReq(
+        hl="en-US",
+        tz=0,
+        timeout=(10, 25),
+        retries=3,
+        backoff_factor=1.5,
     )
+
+    all_rows: list[dict] = []
+    errors: list[str] = []
+
+    for i, keywords in enumerate(FW26_KEYWORD_GROUPS):
+        logger.info(f"Fetching group {i + 1}/{len(FW26_KEYWORD_GROUPS)}: {keywords}")
+        try:
+            rows = await _fetch_group(pt, keywords)
+            all_rows.extend(rows)
+            logger.info(f"  -> {len(rows)} rows returned")
+        except ResponseError as e:
+            msg = f"ResponseError on group {keywords}: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+        except Exception as e:
+            msg = f"Unexpected error on group {keywords}: {e}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+
+        # Polite delay — pytrends is rate-limited aggressively
+        if i < len(FW26_KEYWORD_GROUPS) - 1:
+            await asyncio.sleep(4)
+
+    saved = 0
+    if all_rows:
+        saved = await _save_signals(all_rows)
+
+    summary = {
+        "status": "ok" if not errors else "partial",
+        "groups_processed": len(FW26_KEYWORD_GROUPS),
+        "keywords_processed": sum(len(g) for g in FW26_KEYWORD_GROUPS),
+        "rows_saved": saved,
+        "errors": errors,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    logger.info(f"Search ingest complete: {summary}")
+    return summary
+
+
+# ── Fetch one keyword group ────────────────────────────────────────────────────
+
+async def _fetch_group(pt: TrendReq, keywords: list[str]) -> list[dict]:
+    """
+    Fetch interest-over-time for up to 5 keywords.
+    Returns one row per keyword per date — matching the SearchSignal schema
+    (keyword, date, value, geo).
+    pytrends is synchronous — run in executor to avoid blocking the event loop.
+    """
+    loop = asyncio.get_event_loop()
+
+    def _sync_fetch():
+        pt.build_payload(keywords, cat=0, timeframe=TIMEFRAME, geo=GEO, gprop="")
+        return pt.interest_over_time()
+
+    iot = await loop.run_in_executor(None, _sync_fetch)
+
+    if iot is None or iot.empty:
+        logger.warning(f"Empty response for group: {keywords}")
+        return []
+
+    rows = []
+    for keyword in keywords:
+        if keyword not in iot.columns:
+            continue
+        series = iot[keyword]
+        for date, value in series.items():
+            rows.append({
+                "keyword": keyword,
+                "date":    datetime(date.year, date.month, date.day, tzinfo=timezone.utc),
+                "value":   float(value),
+                "geo":     GEO,
+            })
+
+    return rows
+
+
+# ── Save to database ───────────────────────────────────────────────────────────
+
+async def _save_signals(rows: list[dict]) -> int:
+    """
+    Upsert rows into search_signals.
+    Uses ON CONFLICT DO UPDATE so re-running ingest refreshes values
+    without creating duplicates (unique constraint: keyword + date + geo).
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            stmt = pg_insert(SearchSignal).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_search_keyword_date_geo",
+                set_={"value": stmt.excluded.value},
+            )
+            await session.execute(stmt)
+
+    return len(rows)
+
+
+# ── Score helper for trend_scorer.py ──────────────────────────────────────────
+
+async def get_search_score_for_keyword(keyword: str) -> float:
+    """
+    Returns a normalised 0-100 search score for a given keyword.
+    Used by trend_scorer.py for the 30% search component.
+
+    Method:
+      - Pull the last ~8 weeks of rows for this keyword
+      - Current score  = average of last 2 data points  (60% weight)
+      - Velocity score = % change vs the prior 6 weeks  (40% weight)
+      - Blend and clamp to 0-100
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(SearchSignal)
+            .where(SearchSignal.keyword == keyword, SearchSignal.geo == GEO)
+            .order_by(SearchSignal.date.desc())
+            .limit(56)  # ~8 weeks of weekly data points
+        )
+        rows = result.scalars().all()
+
+    if not rows:
+        return 0.0
+
+    values = [r.value for r in rows]  # newest first
+
+    recent   = sum(values[:2]) / max(len(values[:2]), 1)
+    baseline = sum(values[2:8]) / max(len(values[2:8]), 1)
+    velocity = ((recent - baseline) / max(baseline, 1)) * 100
+
+    current_component  = recent * 0.6
+    velocity_clamped   = max(-50.0, min(100.0, velocity))
+    velocity_component = ((velocity_clamped + 50) / 150) * 40
+
+    return round(min(100.0, current_component + velocity_component), 2)
+
+
+async def get_all_search_signals() -> list[dict]:
+    """
+    Returns the latest value per keyword — used by GET /api/trends/keywords.
+    """
+    async with AsyncSessionLocal() as session:
+        latest_result = await session.execute(
+            select(SearchSignal.date).order_by(SearchSignal.date.desc()).limit(1)
+        )
+        latest_date = latest_result.scalar()
+
+        if not latest_date:
+            return []
+
+        result = await session.execute(
+            select(SearchSignal)
+            .where(SearchSignal.date == latest_date, SearchSignal.geo == GEO)
+            .order_by(SearchSignal.value.desc())
+        )
+        rows = result.scalars().all()
+
+    return [
+        {
+            "keyword": r.keyword,
+            "value":   r.value,
+            "date":    r.date.isoformat() if r.date else None,
+            "geo":     r.geo,
+        }
+        for r in rows
+    ]
