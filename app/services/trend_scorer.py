@@ -1,330 +1,289 @@
-"""
-services/trend_scorer.py
-────────────────────────
-The core scoring engine.  Given raw signals (runway look counts,
-Google Trends search index, social velocity), it produces a single
-composite TrendScore (0–100) for each TrendItem.
+# app/services/trend_scorer.py
+#
+# Computes composite trend scores for TrendItems (broad categories)
+# and ranks TrendSubItems (specific pieces) within each category.
+#
+# Formula:
+#   TrendItem composite = 0.5 * runway_score + 0.3 * search_score + 0.2 * social_score
+#
+# TrendSubItems are ranked by runway_count within their parent category.
+# They don't get a full composite score — runway frequency is the primary
+# signal since search data is tracked at the category level.
+#
+# Called by: POST /api/trends/run-scoring
 
-Scoring formula
-───────────────
-  composite = w_runway * runway_score
-            + w_search * search_score
-            + w_social * social_score
-
-Each sub-score is first computed in its natural unit, then
-normalised to 0–100 using a configurable strategy:
-  • runway_score  — frequency across looks, normalised by season max
-  • search_score  — direct from Google Trends (already 0–100)
-  • social_score  — hashtag velocity, log-normalised
-
-Trend delta (momentum)
-──────────────────────
-  delta = (today - yesterday) / yesterday * 100   (% change)
-  is_rising = delta > RISING_THRESHOLD
-"""
-import math
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
 
 from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.config import get_settings
-from app.models.database import TrendItem, TrendScore, Look, Show, SearchSignal
+from app.db.session import AsyncSessionLocal
+from app.models.database import TrendItem, TrendSubItem, TrendScore, Look, SearchSignal
+from app.services.search_trends import get_search_score_for_keyword
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-# ── Constants ────────────────────────────────────────────────────────────────
-RISING_THRESHOLD = 5.0       # % delta to be flagged as "rising"
-MIN_LOOK_COUNT   = 2         # ignore items seen in fewer than N looks
-SCORE_FLOOR      = 0.0
-SCORE_CEIL       = 100.0
+# Scoring weights — must sum to 1.0
+WEIGHT_RUNWAY = 0.50
+WEIGHT_SEARCH = 0.30
+WEIGHT_SOCIAL = 0.20
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Normalisation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Main scoring function ──────────────────────────────────────────────────────
 
-def _normalise_linear(value: float, max_val: float) -> float:
-    """Scale value to 0–100 linearly against a known maximum."""
-    if max_val == 0:
-        return 0.0
-    return min(SCORE_CEIL, max(SCORE_FLOOR, (value / max_val) * 100))
-
-
-def _normalise_log(value: float, scale: float = 1000.0) -> float:
-    """Log-normalise a raw count/velocity to 0–100."""
-    if value <= 0:
-        return 0.0
-    return min(SCORE_CEIL, (math.log1p(value) / math.log1p(scale)) * 100)
-
-
-def _clamp(value: float) -> float:
-    return min(SCORE_CEIL, max(SCORE_FLOOR, value))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Runway signal aggregation
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def aggregate_runway_signals(
-    db: AsyncSession,
-    season: str,
-) -> Dict[str, Dict]:
+async def run_scoring_pipeline() -> dict:
     """
-    Count how many looks (and distinct shows) each tagged item
-    appears in for the given season.
+    Score all TrendItems and re-rank all TrendSubItems.
+    Writes updated scores back to the database and saves a TrendScore snapshot.
 
-    Returns:
-        {
-          "linen":      {"look_count": 42, "show_count": 8},
-          "gorpcore":   {"look_count": 17, "show_count": 5},
-          ...
-        }
+    Called by: POST /api/trends/run-scoring
     """
-    # Fetch all looks for this season
-    result = await db.execute(
-        select(Look)
-        .join(Show, Look.show_id == Show.id)
-        .where(Show.season == season)
-    )
-    looks: List[Look] = result.scalars().all()
-
-    aggregates: Dict[str, Dict] = {}
-
-    def _record(name: str, show_id: int):
-        name = name.lower().strip()
-        if not name:
-            return
-        if name not in aggregates:
-            aggregates[name] = {"look_count": 0, "show_ids": set()}
-        aggregates[name]["look_count"] += 1
-        aggregates[name]["show_ids"].add(show_id)
-
-    for look in looks:
-        for field in ["materials", "silhouettes", "colors", "color_names",
-                      "accessories", "patterns"]:
-            tags = getattr(look, field) or []
-            for tag in tags:
-                _record(tag, look.show_id)
-
-    # Convert sets to counts
-    for name, data in aggregates.items():
-        data["show_count"] = len(data.pop("show_ids"))
-
-    return aggregates
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Search signal aggregation
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def get_search_index(
-    db: AsyncSession,
-    keyword: str,
-    days: int = 7,
-) -> float:
-    """
-    Returns the average Google Trends value for the last N days.
-    Value is already 0–100.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    result = await db.execute(
-        select(func.avg(SearchSignal.value))
-        .where(SearchSignal.keyword == keyword.lower())
-        .where(SearchSignal.date >= cutoff)
-    )
-    avg = result.scalar()
-    return float(avg) if avg is not None else 0.0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Social signal (placeholder — wire to Instagram / TikTok API)
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def get_social_velocity(keyword: str) -> float:
-    """
-    Returns a 0–100 social velocity score.
-
-    PRODUCTION: Replace the stub below with a call to:
-      - Instagram Graph API  (/ig_hashtag_search → media_count delta)
-      - TikTok Research API  (hashtag view count growth)
-
-    For now, returns a deterministic stub so the scorer still runs.
-    """
-    # TODO: implement real API calls
-    # Example structure:
-    #
-    # async with httpx.AsyncClient() as client:
-    #     resp = await client.get(
-    #         "https://graph.instagram.com/ig_hashtag_search",
-    #         params={"q": keyword, "access_token": IG_TOKEN}
-    #     )
-    #     hashtag_id = resp.json()["data"][0]["id"]
-    #     media = await client.get(
-    #         f"https://graph.instagram.com/{hashtag_id}",
-    #         params={"fields": "media_count", "access_token": IG_TOKEN}
-    #     )
-    #     media_count = media.json()["media_count"]
-    #     return _normalise_log(media_count)
-
-    return 0.0   # stub
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Composite scorer
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_composite_score(
-    runway_score: float,
-    search_score: float,
-    social_score: float,
-    weights: Optional[Tuple[float, float, float]] = None,
-) -> float:
-    """
-    Weighted average of the three sub-scores.
-
-    weights: (w_runway, w_search, w_social) — default from settings.
-    """
-    if weights is None:
-        w_r = settings.WEIGHT_RUNWAY
-        w_s = settings.WEIGHT_SEARCH
-        w_so = settings.WEIGHT_SOCIAL
-    else:
-        w_r, w_s, w_so = weights
-
-    # Normalise weights in case they don't sum to 1
-    total_w = w_r + w_s + w_so
-    if total_w == 0:
-        return 0.0
-    w_r, w_s, w_so = w_r / total_w, w_s / total_w, w_so / total_w
-
-    composite = (
-        w_r  * _clamp(runway_score)  +
-        w_s  * _clamp(search_score)  +
-        w_so * _clamp(social_score)
-    )
-    return round(_clamp(composite), 2)
-
-
-def compute_trend_delta(current: float, previous: float) -> float:
-    """Percentage change from previous to current score."""
-    if previous == 0:
-        return 100.0 if current > 0 else 0.0
-    return round(((current - previous) / previous) * 100, 1)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Full scoring pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def run_scoring_pipeline(db: AsyncSession, season: str) -> Dict:
-    """
-    Main entry point — runs the complete scoring cycle for a season:
-
-    1. Aggregate runway tag counts from indexed looks
-    2. Pull search index from stored SearchSignals
-    3. Get social velocity for each item
-    4. Compute & persist composite TrendScores
-    5. Update TrendItem.trend_score, trend_delta, is_rising
-
-    Returns a summary dict suitable for the /api/trends/run-scoring endpoint.
-    """
-    logger.info(f"[Scorer] Starting pipeline for season={season}")
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-    # ── Step 1: Runway aggregation ───────────────────────────────────────────
-    runway_data = await aggregate_runway_signals(db, season)
-    if not runway_data:
-        logger.warning("[Scorer] No runway data found — index some shows first.")
-        return {"status": "no_data", "scored": 0}
-
-    max_look_count = max((v["look_count"] for v in runway_data.values()), default=1)
-    logger.info(f"[Scorer] {len(runway_data)} distinct items found, max_looks={max_look_count}")
-
-    scored_count = 0
-    results = []
-
-    # ── Step 2–5: Score each item ────────────────────────────────────────────
-    for item_name, runway in runway_data.items():
-        if runway["look_count"] < MIN_LOOK_COUNT:
-            continue
-
-        # Fetch or create TrendItem
-        result = await db.execute(
-            select(TrendItem).where(
-                TrendItem.name == item_name,
-                TrendItem.season == season,
-            )
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(TrendItem).options(selectinload(TrendItem.sub_items))
         )
-        item: Optional[TrendItem] = result.scalar_one_or_none()
-        if item is None:
-            item = TrendItem(name=item_name, category="material", season=season)
-            db.add(item)
-            await db.flush()
+        items: list[TrendItem] = result.scalars().all()
 
-        # Sub-scores
-        runway_score = _normalise_linear(runway["look_count"], max_look_count)
-        search_score = await get_search_index(db, item_name)
-        social_score = await get_social_velocity(item_name)
+    scored = 0
+    errors = []
 
-        composite = compute_composite_score(runway_score, search_score, social_score)
-
-        # Delta vs yesterday
-        prev_score = item.trend_score or 0.0
-        delta = compute_trend_delta(composite, prev_score)
-
-        # Update TrendItem
-        item.runway_count      = runway["look_count"]
-        item.runway_show_count = runway["show_count"]
-        item.search_index      = search_score
-        item.social_velocity   = social_score
-        item.trend_score_prev  = prev_score
-        item.trend_score       = composite
-        item.trend_delta       = delta
-        item.is_rising         = delta > RISING_THRESHOLD
-        item.last_scored_at    = today
-
-        # Persist daily snapshot
-        existing = await db.execute(
-            select(TrendScore).where(
-                TrendScore.item_id == item.id,
-                TrendScore.date == today,
-            )
-        )
-        snap: Optional[TrendScore] = existing.scalar_one_or_none()
-        if snap is None:
-            snap = TrendScore(item_id=item.id, date=today)
-            db.add(snap)
-
-        snap.runway_score = runway_score
-        snap.search_score = search_score
-        snap.social_score = social_score
-        snap.composite    = composite
-
-        scored_count += 1
-        results.append({
-            "name":         item_name,
-            "composite":    composite,
-            "runway_score": round(runway_score, 1),
-            "search_score": round(search_score, 1),
-            "social_score": round(social_score, 1),
-            "delta":        delta,
-            "is_rising":    delta > RISING_THRESHOLD,
-        })
-
-    await db.commit()
-
-    # Sort by composite descending for the summary
-    results.sort(key=lambda x: x["composite"], reverse=True)
-    logger.info(f"[Scorer] Pipeline complete — scored {scored_count} items.")
+    for item in items:
+        try:
+            await _score_item(item)
+            scored += 1
+        except Exception as e:
+            msg = f"Error scoring {item.name}: {e}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
 
     return {
-        "status":     "ok",
-        "season":     season,
-        "scored":     scored_count,
-        "scored_at":  today.isoformat(),
-        "top_10":     results[:10],
+        "status": "ok" if not errors else "partial",
+        "items_scored": scored,
+        "errors": errors,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Score a single TrendItem ───────────────────────────────────────────────────
+
+async def _score_item(item: TrendItem) -> None:
+    """
+    Compute and save the composite score for one TrendItem.
+    Also re-ranks its sub-items by runway_count.
+    """
+    async with AsyncSessionLocal() as session:
+        # Re-fetch with sub_items loaded in this session
+        result = await session.execute(
+            select(TrendItem)
+            .where(TrendItem.id == item.id)
+            .options(selectinload(TrendItem.sub_items))
+        )
+        db_item: TrendItem = result.scalars().first()
+        if not db_item:
+            return
+
+        # ── 1. Runway score (0-100) ───────────────────────────────────────────
+        # Based on how many looks + shows featured this category or any sub-item.
+        # Aggregate sub-item runway counts if they exist, otherwise use item directly.
+        if db_item.sub_items:
+            total_runway = sum(s.runway_count for s in db_item.sub_items)
+            total_shows  = len({
+                brand
+                for s in db_item.sub_items
+                for brand in (s.runway_shows or [])
+            })
+            db_item.runway_count      = total_runway
+            db_item.runway_show_count = total_shows
+        else:
+            total_runway = db_item.runway_count
+            total_shows  = db_item.runway_show_count
+
+        # Normalise: 60+ looks across 8+ shows = score of 100
+        look_score = min(100.0, (total_runway / 60) * 100)
+        show_score = min(100.0, (total_shows  /  8) * 100)
+        runway_score = round((look_score * 0.6) + (show_score * 0.4), 2)
+
+        # ── 2. Search score (0-100) ───────────────────────────────────────────
+        # Pull from SearchSignal rows via the keyword on this item.
+        keyword = db_item.search_keyword or db_item.name.lower()
+        search_score = await get_search_score_for_keyword(keyword)
+
+        # ── 3. Social score (0-100) ───────────────────────────────────────────
+        # Placeholder until Instagram API is wired.
+        # Returns the existing social_score so manual overrides are preserved.
+        social_score = db_item.social_score or 0.0
+
+        # ── 4. Composite ─────────────────────────────────────────────────────
+        composite = round(
+            (runway_score  * WEIGHT_RUNWAY) +
+            (search_score  * WEIGHT_SEARCH) +
+            (social_score  * WEIGHT_SOCIAL),
+            2
+        )
+
+        # ── 5. Delta ─────────────────────────────────────────────────────────
+        prev_score              = db_item.trend_score or 0.0
+        db_item.trend_score_prev = prev_score
+        db_item.trend_delta     = round(composite - prev_score, 2)
+        db_item.is_rising       = composite > prev_score
+
+        # ── 6. Write scores back ──────────────────────────────────────────────
+        db_item.runway_score   = runway_score
+        db_item.search_score   = search_score
+        db_item.trend_score    = composite
+        db_item.last_scored_at = datetime.now(timezone.utc)
+
+        # ── 7. Snapshot for time-series chart ────────────────────────────────
+        snapshot = TrendScore(
+            item_id      = db_item.id,
+            date         = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            runway_score = runway_score,
+            search_score = search_score,
+            social_score = social_score,
+            composite    = composite,
+        )
+        session.add(snapshot)
+
+        # ── 8. Re-rank sub-items by runway_count ─────────────────────────────
+        if db_item.sub_items:
+            sorted_subs = sorted(db_item.sub_items, key=lambda s: s.runway_count, reverse=True)
+            for rank, sub in enumerate(sorted_subs, start=1):
+                sub.rank = rank
+                # If sub-item has its own search keyword, score it independently
+                if sub.search_keyword:
+                    sub.search_score = await get_search_score_for_keyword(sub.search_keyword)
+
+        await session.commit()
+        logger.info(
+            f"Scored {db_item.name}: runway={runway_score} "
+            f"search={search_score} social={social_score} "
+            f"composite={composite} delta={db_item.trend_delta:+.2f}"
+        )
+
+
+# ── API response helpers ───────────────────────────────────────────────────────
+
+async def get_leaderboard(season: str = "FW26", limit: int = 10) -> list[dict]:
+    """
+    Returns top TrendItems by composite score — for the homepage leaderboard.
+    Broad categories only, no sub-item breakdown.
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(TrendItem)
+            .where(TrendItem.season == season)
+            .order_by(TrendItem.trend_score.desc())
+            .limit(limit)
+        )
+        items = result.scalars().all()
+
+    return [
+        {
+            "id":               item.id,
+            "rank":             i + 1,
+            "name":             item.name,
+            "category":         item.category,
+            "season":           item.season,
+            "trend_score":      item.trend_score,
+            "runway_score":     item.runway_score,
+            "search_score":     item.search_score,
+            "social_score":     item.social_score,
+            "runway_count":     item.runway_count,
+            "runway_show_count":item.runway_show_count,
+            "trend_delta":      item.trend_delta,
+            "is_rising":        item.is_rising,
+            "last_scored_at":   item.last_scored_at.isoformat() if item.last_scored_at else None,
+        }
+        for i, item in enumerate(items)
+    ]
+
+
+async def get_trend_detail(item_id: int) -> dict | None:
+    """
+    Returns a TrendItem with its full sub-item breakdown — for the /trends detail page.
+    Includes ranked specific pieces within the category.
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(TrendItem)
+            .where(TrendItem.id == item_id)
+            .options(selectinload(TrendItem.sub_items))
+        )
+        item: TrendItem = result.scalars().first()
+
+    if not item:
+        return None
+
+    # Only return verified sub-items by default; include unverified if none verified yet
+    verified_subs = [s for s in item.sub_items if s.verified]
+    subs_to_show  = verified_subs if verified_subs else item.sub_items
+
+    return {
+        "id":               item.id,
+        "name":             item.name,
+        "category":         item.category,
+        "season":           item.season,
+        "trend_score":      item.trend_score,
+        "runway_score":     item.runway_score,
+        "search_score":     item.search_score,
+        "social_score":     item.social_score,
+        "runway_count":     item.runway_count,
+        "runway_show_count":item.runway_show_count,
+        "trend_delta":      item.trend_delta,
+        "is_rising":        item.is_rising,
+        "breakdown": [
+            {
+                "rank":           sub.rank,
+                "name":           sub.name,
+                "runway_count":   sub.runway_count,
+                "runway_shows":   sub.runway_shows or [],
+                "search_score":   sub.search_score,
+                "source":         sub.source,
+                "verified":       sub.verified,
+                "notes":          sub.notes,
+            }
+            for sub in sorted(subs_to_show, key=lambda s: s.rank)
+        ],
+    }
+
+
+async def get_all_trends_with_breakdown(season: str = "FW26") -> list[dict]:
+    """
+    Returns all TrendItems with sub-item breakdowns for the full /trends page.
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(TrendItem)
+            .where(TrendItem.season == season)
+            .options(selectinload(TrendItem.sub_items))
+            .order_by(TrendItem.trend_score.desc())
+        )
+        items = result.scalars().all()
+
+    return [
+        {
+            "id":           item.id,
+            "rank":         i + 1,
+            "name":         item.name,
+            "category":     item.category,
+            "trend_score":  item.trend_score,
+            "trend_delta":  item.trend_delta,
+            "is_rising":    item.is_rising,
+            "runway_count": item.runway_count,
+            "search_score": item.search_score,
+            "breakdown": [
+                {
+                    "rank":         sub.rank,
+                    "name":         sub.name,
+                    "runway_count": sub.runway_count,
+                    "runway_shows": sub.runway_shows or [],
+                    "verified":     sub.verified,
+                    "source":       sub.source,
+                }
+                for sub in sorted(item.sub_items, key=lambda s: s.rank)
+                if sub.verified or not any(s.verified for s in item.sub_items)
+            ],
+        }
+        for i, item in enumerate(items)
+    ]
