@@ -22,7 +22,7 @@ async def seed_looks_for_show(
     tag_images: bool = True,
 ) -> Dict[str, Any]:
     """
-    Insert Look rows for an existing Show, identified by slug (lowercased brand).
+    Insert Look rows for an existing Show, identified by slug (lowercased brand). 
 
     Args:
         db:          Async DB session
@@ -64,7 +64,19 @@ async def seed_looks_for_show(
             looks_out.append({"look_number": look_number, "image_url": url, "status": "skipped"})
             continue
 
-        look = Look(show_id=show.id, look_number=look_number, image_url=url)
+        look = Look(
+    show_id=show.id,
+    look_number=look_number,
+    image_url=url,
+    materials=[],
+    silhouettes=[],
+    colors=[],
+    color_names=[],
+    accessories=[],
+    patterns=[],
+    categories=[],
+    sub_item_tags=[],
+)
         db.add(look)
         await db.flush()
         created += 1
@@ -91,6 +103,7 @@ async def seed_looks_for_show(
         select(func.count(Look.id)).where(Look.show_id == show.id)
     )
     show.total_looks = result.scalar()
+    await db.commit()  # ← ADD THIS
 
     return {
         "show_id": show.id,
