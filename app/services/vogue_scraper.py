@@ -1,232 +1,79 @@
 """
 services/vogue_scraper.py — Scrape runway look image URLs from Vogue Runway pages.
-
-Accepts a URL like:
-    https://www.vogue.com/fashion-shows/fall-2026-ready-to-wear/gucci
-
-First tries Vogue's internal slideshow API. If that fails, appends
-/slideshow/collection, fetches the page, and extracts all look image URLs
-from the slideshow gallery HTML.
+Uses Playwright for full JS rendering to capture all look images.
 """
 import logging
 import re
+import asyncio
 from typing import List
-from urllib.parse import urlparse
-
-import httpx
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.vogue.com",
-    "Cookie": "",  # placeholder — populate with a valid session cookie if needed
-}
-
-# Matches Vogue's image CDN URLs for runway photos
-_IMG_URL_RE = re.compile(r"https://assets\.vogue\.com/photos/[a-f0-9]+/")
-
-# Substrings that indicate a site asset rather than a runway look photo
-_EXCLUDED_SUBSTRINGS = (".svg", "logo", "static")
-
+_EXCLUDED_SUBSTRINGS = (".svg", "logo", "static", "/verso/", "profile-pic", "w_80")
 
 def _is_runway_photo(url: str) -> bool:
-    """Return True if *url* looks like an actual runway look photo."""
-    if "assets.vogue.com/photos" not in url:
-        return False
     url_lower = url.lower()
     return not any(sub in url_lower for sub in _EXCLUDED_SUBSTRINGS)
 
-
-def _normalise_url(url: str) -> str:
-    """Ensure URL points to the /slideshow/collection sub-page."""
-    url = url.rstrip("/")
-    if not url.endswith("/slideshow/collection"):
-        if "/slideshow" in url:
-            url = url.rsplit("/slideshow", 1)[0] + "/slideshow/collection"
-        else:
-            url += "/slideshow/collection"
-    return url
-
-
-def _pick_best_src(img_tag) -> str | None:
-    """Extract the highest-quality image URL from an <img> or <source> tag."""
-    # Prefer srcset (usually has higher-res options), fall back to src
-    srcset = img_tag.get("srcset", "")
-    if srcset:
-        # srcset format: "url1 width1w, url2 width2w, ..."
-        # Pick the widest variant
-        candidates = []
-        for entry in srcset.split(","):
-            parts = entry.strip().split()
-            if len(parts) >= 1:
-                src = parts[0]
-                width = 0
-                if len(parts) >= 2 and parts[1].endswith("w"):
-                    try:
-                        width = int(parts[1][:-1])
-                    except ValueError:
-                        pass
-                candidates.append((width, src))
-        if candidates:
-            candidates.sort(key=lambda c: c[0], reverse=True)
-            return candidates[0][1]
-
-    src = img_tag.get("src", "")
-    if src and not src.startswith("data:"):
-        return src
-
-    return None
-
-
-def _build_api_url(url: str) -> str | None:
-    """Build the Vogue internal slideshow API URL from a show page URL.
-
-    Expected path: /fashion-shows/<season>/<designer>[/slideshow/...]
-    API pattern:   /api/v1/fashion-shows/<season>/<designer>/slideshow
+async def scrape_vogue_runway(page_url: str) -> List[str]:
     """
-    path = urlparse(url).path.strip("/")
-    # Remove any /slideshow/... suffix so we get clean season + designer
-    path = re.sub(r"/slideshow.*$", "", path)
-    parts = path.split("/")
-    # parts should be ["fashion-shows", "<season>", "<designer>"]
-    if len(parts) >= 3 and parts[0] == "fashion-shows":
-        season = parts[1]
-        designer = parts[2]
-        return f"https://www.vogue.com/api/v1/fashion-shows/{season}/{designer}/slideshow"
-    return None
+    Scrape all look image URLs from a Vogue Runway show page using Playwright.
+    Scrolls the full page to trigger lazy-loaded images.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.error("[VogueScraper] Playwright not installed")
+        return []
 
+    image_urls = []
+    seen = set()
 
-async def _try_api(client: httpx.AsyncClient, api_url: str) -> List[str]:
-    """Attempt to fetch look images from Vogue's internal slideshow API."""
-    api_headers = {**_HEADERS, "Accept": "application/json"}
-    resp = await client.get(api_url, headers=api_headers)
-    resp.raise_for_status()
-    data = resp.json()
-
-    image_urls: list[str] = []
-    seen: set[str] = set()
-
-    # The API response typically nests images under a "slides" or "items" key.
-    slides = data.get("slides") or data.get("items") or []
-    if isinstance(data, list):
-        slides = data
-
-    for slide in slides:
-        img_url = None
-        # Try several known shapes the API may use
-        if isinstance(slide, str):
-            img_url = slide
-        elif isinstance(slide, dict):
-            img_url = (
-                slide.get("photosTout", {}).get("url")
-                or slide.get("image", {}).get("url")
-                or slide.get("url")
-                or slide.get("src")
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-        if img_url and img_url not in seen:
-            seen.add(img_url)
-            image_urls.append(img_url)
+            page = await browser.new_page(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
 
-    return image_urls
+            await page.goto(page_url, wait_until="networkidle", timeout=60000)
 
+            # Scroll down slowly to trigger lazy loading
+            for i in range(20):
+                await page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+                await asyncio.sleep(0.5)
 
-async def scrape_vogue_runway(url: str) -> List[str]:
-    """
-    Scrape all runway look image URLs from a Vogue Runway show page.
+            # Get all image sources
+            images = await page.evaluate("""
+                () => {
+                    const imgs = document.querySelectorAll('img');
+                    return Array.from(imgs).map(img => img.src || img.dataset.src || '').filter(Boolean);
+                }
+            """)
 
-    Tries Vogue's internal slideshow API first; falls back to HTML scraping.
+            await browser.close()
 
-    Args:
-        url: Vogue Runway show URL (e.g.
-             https://www.vogue.com/fashion-shows/fall-2026-ready-to-wear/gucci)
+            for url in images:
+                if url and url not in seen and _is_runway_photo(url) and 'assets.vogue.com/photos' in url:
+                    seen.add(url)
+                    image_urls.append(url)
 
-    Returns:
-        Deduplicated list of image URLs in look order.
+    except Exception as e:
+        logger.error(f"[VogueScraper] Playwright error: {e}")
+        return []
 
-    Raises:
-        ValueError: If the URL doesn't look like a Vogue Runway page.
-        httpx.HTTPStatusError: If the page returns a non-2xx status.
-    """
-    parsed = urlparse(url)
-    if "vogue.com" not in parsed.netloc:
-        raise ValueError(f"Not a Vogue URL: {url}")
+    # Deduplicate by photo ID to avoid same look in multiple resolutions
+    deduped = {}
+    for url in image_urls:
+        match = re.search(r'/photos/([a-f0-9]+)/', url)
+        if match:
+            photo_id = match.group(1)
+            if photo_id not in deduped:
+                deduped[photo_id] = url
 
-    async with httpx.AsyncClient(
-        headers=_HEADERS, follow_redirects=True, timeout=30.0
-    ) as client:
-        # --- Strategy 0: Vogue internal slideshow API -----------------------
-        api_url = _build_api_url(url)
-        if api_url:
-            try:
-                logger.info(f"[VogueScraper] Trying API {api_url}")
-                api_results = await _try_api(client, api_url)
-                if api_results:
-                    api_results = [u for u in api_results if _is_runway_photo(u)]
-                    logger.info(
-                        f"[VogueScraper] API returned {len(api_results)} look images"
-                    )
-                    return api_results
-                logger.info("[VogueScraper] API returned no images, falling back to HTML")
-            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, KeyError) as exc:
-                logger.info(f"[VogueScraper] API failed ({exc}), falling back to HTML")
-
-        # --- HTML scraping fallback -----------------------------------------
-        page_url = _normalise_url(url)
-        logger.info(f"[VogueScraper] Fetching {page_url}")
-        resp = await client.get(page_url)
-        resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    image_urls: list[str] = []
-    seen: set[str] = set()
-
-    # Strategy 1: Look for <img> tags inside the slideshow/gallery containers.
-    # Vogue uses responsive images — check <picture> > <source> first, then <img>.
-    for picture in soup.find_all("picture"):
-        sources = picture.find_all("source")
-        img = picture.find("img")
-        best = None
-        for source in sources:
-            best = _pick_best_src(source)
-            if best:
-                break
-        if not best and img:
-            best = _pick_best_src(img)
-        if best and best not in seen:
-            seen.add(best)
-            image_urls.append(best)
-
-    # Strategy 2: If no <picture> tags found, fall back to standalone <img> tags
-    # whose src matches the Vogue CDN pattern.
-    if not image_urls:
-        for img in soup.find_all("img"):
-            src = _pick_best_src(img)
-            if src and _IMG_URL_RE.search(src) and src not in seen:
-                seen.add(src)
-                image_urls.append(src)
-
-    # Strategy 3: Extract from JSON-LD or inline script data.
-    if not image_urls:
-        for script in soup.find_all("script", type="application/ld+json"):
-            text = script.string or ""
-            urls = _IMG_URL_RE.findall(text)
-            for u in urls:
-                if u not in seen:
-                    seen.add(u)
-                    image_urls.append(u)
-
-    # Filter out non-runway images (thumbnails, logos, ads, SVGs, static assets).
-    runway_urls = [u for u in image_urls if _is_runway_photo(u)]
-
-    final = runway_urls
-
+    final = list(deduped.values())
     logger.info(f"[VogueScraper] Found {len(final)} look images from {page_url}")
     return final
