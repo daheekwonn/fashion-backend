@@ -226,9 +226,7 @@ async def scrape_vogue_runway(url: str) -> List[str]:
     # Filter out non-runway images (thumbnails, logos, ads, SVGs, static assets).
     runway_urls = [u for u in image_urls if _is_runway_photo(u)]
 
-    # If filtering removed everything, return the unfiltered list — the caller
-    # can inspect and decide.
-    final = runway_urls if runway_urls else image_urls
+    final = runway_urls
 
     logger.info(f"[VogueScraper] Found {len(final)} look images from {page_url}")
     return final
