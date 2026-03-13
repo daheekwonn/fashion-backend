@@ -12,6 +12,7 @@ GET  /api/trends/shows              → indexed runway shows
 POST /api/trends/run-scoring        → trigger scoring pipeline
 POST /api/trends/ingest/search      → trigger Google Trends ingestion
 POST /api/trends/ingest/runway      → trigger runway ingestion (future: Roboflow)
+POST /api/trends/ingest/vogue       → scrape Vogue Runway page, seed looks + Vision tag
 POST /api/trends/seed/shows         → seed FW26 runway Show rows
 POST /api/trends/seed/looks         → manually seed Look rows + Vision tag them
 """
@@ -381,4 +382,43 @@ async def seed_looks(body: SeedLooksBody, db: AsyncSession = Depends(get_db)):
         result = await seed_looks_for_show(db, body.show_slug, body.image_urls)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    return result
+
+
+class IngestVogueBody(BaseModel):
+    show_slug: str
+    vogue_url: str
+
+
+@router.post("/ingest/vogue")
+async def ingest_vogue(body: IngestVogueBody, db: AsyncSession = Depends(get_db)):
+    """
+    Scrape a Vogue Runway show page for look images, seed them as Look rows,
+    and run Vision tagging on each.
+
+    Body:
+        show_slug: lowercased brand name, hyphens for spaces (e.g. "gucci", "the-row")
+        vogue_url: full Vogue Runway URL
+                   (e.g. https://www.vogue.com/fashion-shows/fall-2026-ready-to-wear/gucci)
+    """
+    from app.services.vogue_scraper import scrape_vogue_runway
+    from app.services.manual_seed_looks import seed_looks_for_show
+
+    try:
+        image_urls = await scrape_vogue_runway(body.vogue_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to scrape Vogue page: {e}")
+
+    if not image_urls:
+        raise HTTPException(status_code=404, detail="No look images found on the Vogue page.")
+
+    try:
+        result = await seed_looks_for_show(db, body.show_slug, image_urls)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    result["vogue_url"] = body.vogue_url
+    result["images_scraped"] = len(image_urls)
     return result
