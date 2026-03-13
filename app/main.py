@@ -31,6 +31,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up — initialising database...")
     await init_db()
     logger.info("Database ready.")
+    # Install Playwright Chromium if not already installed
+    import subprocess, sys
+    logger.info("Installing Playwright Chromium...")
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
+    logger.info("Playwright ready.")
     yield
     logger.info("Shutting down.")
 
