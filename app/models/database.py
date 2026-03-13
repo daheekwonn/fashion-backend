@@ -3,7 +3,7 @@ models/database.py — SQLAlchemy ORM models
 """
 from sqlalchemy import (
     Column, Integer, String, Float, DateTime, ForeignKey,
-    Boolean, Text, JSON, UniqueConstraint, Index,
+    Boolean, Text, JSON, UniqueConstraint, Index, ARRAY
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
@@ -42,14 +42,14 @@ class Look(Base):
     show_id      = Column(Integer, ForeignKey("shows.id"), nullable=False, index=True)
     look_number  = Column(Integer, nullable=True)
     image_url    = Column(String(500), nullable=True)
-    materials    = Column(JSON, default=list)
-    silhouettes  = Column(JSON, default=list)
-    colors       = Column(JSON, default=list)
-    color_names  = Column(JSON, default=list)
-    accessories  = Column(JSON, default=list)
-    patterns     = Column(JSON, default=list)
-    categories   = Column(JSON, default=list)
-    sub_item_tags = Column(JSON, default=list)
+    materials    = Column(ARRAY(String), default=list)
+silhouettes  = Column(ARRAY(String), default=list)
+colors       = Column(ARRAY(String), default=list)
+color_names  = Column(ARRAY(String), default=list)
+accessories  = Column(ARRAY(String), default=list)
+patterns     = Column(ARRAY(String), default=list)
+categories   = Column(ARRAY(String), default=list)
+sub_item_tags = Column(ARRAY(String), default=list)
     vision_raw   = Column(JSON, default=dict)
     tagged_at    = Column(DateTime(timezone=True), nullable=True)
 
