@@ -52,11 +52,11 @@ TREND_KEYWORDS = {
     "Boucle":            ["boucle", "bouclé", "tweed", "textured wool"],
     "Satin":             ["satin", "silk", "lustrous", "shiny fabric"],
     "Lace":              ["lace", "lace trim", "lacework"],
-    "Burgundy":          ["burgundy", "wine", "bordeaux", "dark red", "maroon"],
-    "Chocolate Brown":   ["brown", "chocolate", "mocha", "dark brown"],
-    "Ivory & Cream":     ["ivory", "cream", "off-white", "ecru", "white"],
-    "Forest Green":      ["green", "forest green", "olive", "emerald", "dark green"],
-    "Camel":             ["camel", "tan", "beige", "sand", "nude"],
+    "Burgundy":          ["burgundy", "wine red", "bordeaux"],
+    "Chocolate Brown":   ["chocolate brown", "dark brown", "mocha brown"],
+    "Ivory & Cream":     ["ivory", "cream", "off-white", "ecru"],
+    "Forest Green":      ["forest green", "dark green", "emerald green"],
+    "Camel":             ["camel"],
 }
 
 
@@ -175,8 +175,8 @@ async def _score_item(item: TrendItem) -> None:
 
         # ── 1. Runway score (0-100) ───────────────────────────────────────────
         # 60+ looks across 8+ shows = score of 100
-        look_score   = min(100.0, (total_runway / 60) * 100)
-        show_score   = min(100.0, (total_shows  /  8) * 100)
+        look_score = min(100.0, (total_runway / 200) * 100)
+        show_score = min(100.0, (total_shows  / 30) * 100)
         runway_score = round((look_score * 0.6) + (show_score * 0.4), 2)
 
         # ── 2. Search score (0-100) ───────────────────────────────────────────
