@@ -12,6 +12,7 @@ GET  /api/trends/shows              → indexed runway shows
 POST /api/trends/run-scoring        → trigger scoring pipeline
 POST /api/trends/ingest/search      → trigger Google Trends ingestion
 POST /api/trends/ingest/runway      → trigger runway ingestion (future: Roboflow)
+POST /api/trends/seed/looks         → manually seed Look rows + Vision tag them
 """
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
@@ -346,4 +347,26 @@ async def seed_trend_subitems(db: AsyncSession = Depends(get_db)):
     """
     from app.services.seed import seed_fw26_subitems
     result = await seed_fw26_subitems(db)
+    return result
+
+
+class SeedLooksBody(BaseModel):
+    show_slug:  str
+    image_urls: List[str]
+
+
+@router.post("/seed/looks")
+async def seed_looks(body: SeedLooksBody, db: AsyncSession = Depends(get_db)):
+    """
+    Manually seed Look rows for an existing show and run Vision tagging.
+
+    Body:
+        show_slug:  lowercased brand name, hyphens for spaces (e.g. "the-row")
+        image_urls: list of image URLs to create as Look rows
+    """
+    from app.services.manual_seed_looks import seed_looks_for_show
+    try:
+        result = await seed_looks_for_show(db, body.show_slug, body.image_urls)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return result
