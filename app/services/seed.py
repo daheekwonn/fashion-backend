@@ -11,7 +11,7 @@
 import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models.database import TrendItem, TrendSubItem
+from app.models.database import TrendItem, TrendSubItem, Show
 
 logger = logging.getLogger(__name__)
 
@@ -183,3 +183,127 @@ async def seed_fw26_subitems(db: AsyncSession) -> dict:
     if missing_parents:
         result["warning"] = f"Missing parents: {list(set(missing_parents))}. Run /seed/items first."
     return result
+
+
+# ── FW26 runway shows ────────────────────────────────────────────────────────
+
+FW26_SHOWS = [
+    # Paris
+    {"brand": "Alaia",              "city": "Paris"},
+    {"brand": "Balenciaga",         "city": "Paris"},
+    {"brand": "Balmain",            "city": "Paris"},
+    {"brand": "Celine",             "city": "Paris"},
+    {"brand": "Chanel",             "city": "Paris"},
+    {"brand": "Chloe",              "city": "Paris"},
+    {"brand": "Christian Dior",     "city": "Paris"},
+    {"brand": "Comme des Garcons",  "city": "Paris"},
+    {"brand": "Courrèges",          "city": "Paris"},
+    {"brand": "Dries Van Noten",    "city": "Paris"},
+    {"brand": "Gabriela Hearst",    "city": "Paris"},
+    {"brand": "Givenchy",           "city": "Paris"},
+    {"brand": "Hermes",             "city": "Paris"},
+    {"brand": "Isabel Marant",      "city": "Paris"},
+    {"brand": "Jacquemus",          "city": "Paris"},
+    {"brand": "Jean Paul Gaultier", "city": "Paris"},
+    {"brand": "Jil Sander",         "city": "Paris"},
+    {"brand": "Junya Watanabe",     "city": "Paris"},
+    {"brand": "Kiko Kostadinov",    "city": "Paris"},
+    {"brand": "Lacoste",            "city": "Paris"},
+    {"brand": "Lanvin",             "city": "Paris"},
+    {"brand": "Lemaire",            "city": "Paris"},
+    {"brand": "Loewe",              "city": "Paris"},
+    {"brand": "Louis Vuitton",      "city": "Paris"},
+    {"brand": "Magda Butrym",       "city": "Paris"},
+    {"brand": "McQueen",            "city": "Paris"},
+    {"brand": "Miu Miu",            "city": "Paris"},
+    {"brand": "Mugler",             "city": "Paris"},
+    {"brand": "Nina Ricci",         "city": "Paris"},
+    {"brand": "Patou",              "city": "Paris"},
+    {"brand": "Rabanne",            "city": "Paris"},
+    {"brand": "Rick Owens",         "city": "Paris"},
+    {"brand": "Saint Laurent",      "city": "Paris"},
+    {"brand": "Schiaparelli",       "city": "Paris"},
+    {"brand": "Stella McCartney",   "city": "Paris"},
+    {"brand": "Tom Ford",           "city": "Paris"},
+    {"brand": "Toteme",             "city": "Paris"},
+    {"brand": "Undercover",         "city": "Paris"},
+    {"brand": "Valentino",          "city": "Paris"},
+    {"brand": "Victoria Beckham",   "city": "Paris"},
+    {"brand": "Yohji Yamamoto",     "city": "Paris"},
+    {"brand": "Zimmermann",         "city": "Paris"},
+    # Milan
+    {"brand": "Blumarine",             "city": "Milan"},
+    {"brand": "Boss",                  "city": "Milan"},
+    {"brand": "Bottega Veneta",        "city": "Milan"},
+    {"brand": "Diesel",                "city": "Milan"},
+    {"brand": "Dolce & Gabbana",       "city": "Milan"},
+    {"brand": "Emporio Armani",        "city": "Milan"},
+    {"brand": "Etro",                  "city": "Milan"},
+    {"brand": "Fendi",                 "city": "Milan"},
+    {"brand": "Ferragamo",             "city": "Milan"},
+    {"brand": "Giorgio Armani",        "city": "Milan"},
+    {"brand": "Gucci",                 "city": "Milan"},
+    {"brand": "Marco Rambaldi",        "city": "Milan"},
+    {"brand": "Marni",                 "city": "Milan"},
+    {"brand": "Max Mara",              "city": "Milan"},
+    {"brand": "Missoni",               "city": "Milan"},
+    {"brand": "MM6 Maison Margiela",   "city": "Milan"},
+    {"brand": "Moschino",              "city": "Milan"},
+    {"brand": "No. 21",                "city": "Milan"},
+    {"brand": "Prada",                 "city": "Milan"},
+    {"brand": "Roberto Cavalli",       "city": "Milan"},
+    {"brand": "Sportmax",              "city": "Milan"},
+    {"brand": "Tod's",                 "city": "Milan"},
+    {"brand": "Valentino",             "city": "Milan"},
+    # London
+    {"brand": "Acne Studios",    "city": "London"},
+    {"brand": "Burberry",        "city": "London"},
+    {"brand": "Conner Ives",     "city": "London"},
+    {"brand": "Erdem",           "city": "London"},
+    {"brand": "Simone Rocha",    "city": "London"},
+    {"brand": "Richard Quinn",   "city": "London"},
+    # New York
+    {"brand": "Altuzarra",        "city": "New York"},
+    {"brand": "Carolina Herrera", "city": "New York"},
+    {"brand": "Coach",            "city": "New York"},
+    {"brand": "Khaite",           "city": "New York"},
+    {"brand": "Michael Kors",     "city": "New York"},
+    {"brand": "Prabal Gurung",    "city": "New York"},
+    {"brand": "Proenza Schouler", "city": "New York"},
+    {"brand": "Ralph Lauren",     "city": "New York"},
+    {"brand": "Sandy Liang",      "city": "New York"},
+    {"brand": "Tory Burch",       "city": "New York"},
+    {"brand": "Ulla Johnson",     "city": "New York"},
+    # Copenhagen
+    {"brand": "Baum und Pferdgarten", "city": "Copenhagen"},
+    {"brand": "Holzweiler",           "city": "Copenhagen"},
+    {"brand": "Rave Review",          "city": "Copenhagen"},
+    {"brand": "Skall Studio",         "city": "Copenhagen"},
+]
+
+
+async def seed_fw26_shows(db: AsyncSession) -> dict:
+    """
+    Create FW26 Show rows for all major designers/cities.
+    Skips shows that already exist (unique on brand+season).
+    """
+    created = 0
+    skipped = 0
+
+    for data in FW26_SHOWS:
+        result = await db.execute(
+            select(Show).where(Show.brand == data["brand"], Show.season == "FW26")
+        )
+        if result.scalars().first():
+            skipped += 1
+            continue
+
+        db.add(Show(
+            brand  = data["brand"],
+            season = "FW26",
+            city   = data["city"],
+        ))
+        created += 1
+
+    logger.info(f"Seed shows: {created} created, {skipped} skipped")
+    return {"status": "ok", "created": created, "skipped": skipped, "total": len(FW26_SHOWS)}

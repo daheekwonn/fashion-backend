@@ -12,6 +12,7 @@ GET  /api/trends/shows              → indexed runway shows
 POST /api/trends/run-scoring        → trigger scoring pipeline
 POST /api/trends/ingest/search      → trigger Google Trends ingestion
 POST /api/trends/ingest/runway      → trigger runway ingestion (future: Roboflow)
+POST /api/trends/seed/shows         → seed FW26 runway Show rows
 POST /api/trends/seed/looks         → manually seed Look rows + Vision tag them
 """
 from datetime import datetime, timezone, timedelta
@@ -347,6 +348,17 @@ async def seed_trend_subitems(db: AsyncSession = Depends(get_db)):
     """
     from app.services.seed import seed_fw26_subitems
     result = await seed_fw26_subitems(db)
+    return result
+
+
+@router.post("/seed/shows")
+async def seed_shows(db: AsyncSession = Depends(get_db)):
+    """
+    One-time seed: creates FW26 Show rows for all major designers/cities.
+    Safe to re-run — skips shows that already exist.
+    """
+    from app.services.seed import seed_fw26_shows
+    result = await seed_fw26_shows(db)
     return result
 
 
