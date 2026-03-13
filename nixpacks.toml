@@ -1,5 +1,2 @@
 [phases.setup]
-nixPkgs = ["chromium", "nss", "atk", "cups", "dbus", "expat", "libdrm", "libxkbcommon", "mesa"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt", "python -m playwright install chromium", "python -m playwright install-deps chromium"]
+nixPkgs = ["chromium", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat", "libdrm", "libxkbcommon", "mesa", "pango", "alsa-lib", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "libgbm"]
