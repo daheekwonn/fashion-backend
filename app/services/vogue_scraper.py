@@ -4,8 +4,9 @@ services/vogue_scraper.py — Scrape runway look image URLs from Vogue Runway pa
 Accepts a URL like:
     https://www.vogue.com/fashion-shows/fall-2026-ready-to-wear/gucci
 
-Appends /slideshow/collection if needed, fetches the page, and extracts
-all look image URLs from the slideshow gallery.
+First tries Vogue's internal slideshow API. If that fails, appends
+/slideshow/collection, fetches the page, and extracts all look image URLs
+from the slideshow gallery HTML.
 """
 import logging
 import re
@@ -25,6 +26,8 @@ _HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.vogue.com",
+    "Cookie": "",  # placeholder — populate with a valid session cookie if needed
 }
 
 # Matches Vogue's image CDN URLs for runway photos
@@ -72,9 +75,63 @@ def _pick_best_src(img_tag) -> str | None:
     return None
 
 
+def _build_api_url(url: str) -> str | None:
+    """Build the Vogue internal slideshow API URL from a show page URL.
+
+    Expected path: /fashion-shows/<season>/<designer>[/slideshow/...]
+    API pattern:   /api/v1/fashion-shows/<season>/<designer>/slideshow
+    """
+    path = urlparse(url).path.strip("/")
+    # Remove any /slideshow/... suffix so we get clean season + designer
+    path = re.sub(r"/slideshow.*$", "", path)
+    parts = path.split("/")
+    # parts should be ["fashion-shows", "<season>", "<designer>"]
+    if len(parts) >= 3 and parts[0] == "fashion-shows":
+        season = parts[1]
+        designer = parts[2]
+        return f"https://www.vogue.com/api/v1/fashion-shows/{season}/{designer}/slideshow"
+    return None
+
+
+async def _try_api(client: httpx.AsyncClient, api_url: str) -> List[str]:
+    """Attempt to fetch look images from Vogue's internal slideshow API."""
+    api_headers = {**_HEADERS, "Accept": "application/json"}
+    resp = await client.get(api_url, headers=api_headers)
+    resp.raise_for_status()
+    data = resp.json()
+
+    image_urls: list[str] = []
+    seen: set[str] = set()
+
+    # The API response typically nests images under a "slides" or "items" key.
+    slides = data.get("slides") or data.get("items") or []
+    if isinstance(data, list):
+        slides = data
+
+    for slide in slides:
+        img_url = None
+        # Try several known shapes the API may use
+        if isinstance(slide, str):
+            img_url = slide
+        elif isinstance(slide, dict):
+            img_url = (
+                slide.get("photosTout", {}).get("url")
+                or slide.get("image", {}).get("url")
+                or slide.get("url")
+                or slide.get("src")
+            )
+        if img_url and img_url not in seen:
+            seen.add(img_url)
+            image_urls.append(img_url)
+
+    return image_urls
+
+
 async def scrape_vogue_runway(url: str) -> List[str]:
     """
     Scrape all runway look image URLs from a Vogue Runway show page.
+
+    Tries Vogue's internal slideshow API first; falls back to HTML scraping.
 
     Args:
         url: Vogue Runway show URL (e.g.
@@ -91,12 +148,27 @@ async def scrape_vogue_runway(url: str) -> List[str]:
     if "vogue.com" not in parsed.netloc:
         raise ValueError(f"Not a Vogue URL: {url}")
 
-    page_url = _normalise_url(url)
-    logger.info(f"[VogueScraper] Fetching {page_url}")
-
     async with httpx.AsyncClient(
         headers=_HEADERS, follow_redirects=True, timeout=30.0
     ) as client:
+        # --- Strategy 0: Vogue internal slideshow API -----------------------
+        api_url = _build_api_url(url)
+        if api_url:
+            try:
+                logger.info(f"[VogueScraper] Trying API {api_url}")
+                api_results = await _try_api(client, api_url)
+                if api_results:
+                    logger.info(
+                        f"[VogueScraper] API returned {len(api_results)} look images"
+                    )
+                    return api_results
+                logger.info("[VogueScraper] API returned no images, falling back to HTML")
+            except (httpx.HTTPStatusError, httpx.RequestError, ValueError, KeyError) as exc:
+                logger.info(f"[VogueScraper] API failed ({exc}), falling back to HTML")
+
+        # --- HTML scraping fallback -----------------------------------------
+        page_url = _normalise_url(url)
+        logger.info(f"[VogueScraper] Fetching {page_url}")
         resp = await client.get(page_url)
         resp.raise_for_status()
 
