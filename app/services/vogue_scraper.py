@@ -33,6 +33,17 @@ _HEADERS = {
 # Matches Vogue's image CDN URLs for runway photos
 _IMG_URL_RE = re.compile(r"https://assets\.vogue\.com/photos/[a-f0-9]+/")
 
+# Substrings that indicate a site asset rather than a runway look photo
+_EXCLUDED_SUBSTRINGS = (".svg", "logo", "static")
+
+
+def _is_runway_photo(url: str) -> bool:
+    """Return True if *url* looks like an actual runway look photo."""
+    if "assets.vogue.com/photos" not in url:
+        return False
+    url_lower = url.lower()
+    return not any(sub in url_lower for sub in _EXCLUDED_SUBSTRINGS)
+
 
 def _normalise_url(url: str) -> str:
     """Ensure URL points to the /slideshow/collection sub-page."""
@@ -158,6 +169,7 @@ async def scrape_vogue_runway(url: str) -> List[str]:
                 logger.info(f"[VogueScraper] Trying API {api_url}")
                 api_results = await _try_api(client, api_url)
                 if api_results:
+                    api_results = [u for u in api_results if _is_runway_photo(u)]
                     logger.info(
                         f"[VogueScraper] API returned {len(api_results)} look images"
                     )
@@ -211,12 +223,8 @@ async def scrape_vogue_runway(url: str) -> List[str]:
                     seen.add(u)
                     image_urls.append(u)
 
-    # Filter out non-runway images (thumbnails, logos, ads) by URL pattern.
-    # Vogue runway photos live under assets.vogue.com/photos/
-    runway_urls = [
-        u for u in image_urls
-        if "assets.vogue.com/photos/" in u or "assets.vogue.com/image/" in u
-    ]
+    # Filter out non-runway images (thumbnails, logos, ads, SVGs, static assets).
+    runway_urls = [u for u in image_urls if _is_runway_photo(u)]
 
     # If filtering removed everything, return the unfiltered list — the caller
     # can inspect and decide.
