@@ -9,6 +9,8 @@ GET  /api/trends/keywords           → raw search signals (tag cloud / keyword 
 GET  /api/trends/colors             → trending colors
 GET  /api/trends/materials          → trending materials
 GET  /api/trends/shows              → indexed runway shows
+GET  /api/trends/shows/by-slug/{slug} → show by URL slug (e.g. chanel-fw26)
+GET  /api/trends/shows/{id}/looks   → look images + metadata for a show
 POST /api/trends/run-scoring        → trigger scoring pipeline
 POST /api/trends/ingest/search      → trigger Google Trends ingestion
 POST /api/trends/ingest/runway      → trigger runway ingestion (future: Roboflow)
@@ -21,13 +23,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
 from app.config import get_settings
-from app.models.database import TrendItem, TrendSubItem, TrendScore, Show
+from app.models.database import TrendItem, TrendSubItem, TrendScore, Show, Look
 from app.services.trend_scorer import (
     run_scoring_pipeline,
     get_leaderboard,
@@ -289,6 +291,76 @@ async def list_shows(
             "show_date":   s.show_date.isoformat() if s.show_date else None,
         }
         for s in shows
+    ]
+
+
+# ── Show by slug ──────────────────────────────────────────────────────────────
+
+@router.get("/shows/by-slug/{slug}")
+async def get_show_by_slug(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Look up a show by its URL slug.
+    Converts slug to brand name: 'chanel-fw26' → 'Chanel',
+    'saint-laurent-fw26' → 'Saint Laurent', 'jw-anderson-fw26' → 'JW Anderson'.
+    Strips the trailing season suffix (e.g. '-fw26') before matching.
+    """
+    # Strip trailing season suffix like -fw26, -ss25, etc.
+    import re
+    brand_slug = re.sub(r"-(fw|ss)\d{2}$", "", slug, flags=re.IGNORECASE)
+    brand_normalized = brand_slug.lower().replace("-", " ")
+
+    result = await db.execute(
+        select(Show).where(func.lower(Show.brand) == brand_normalized)
+    )
+    show = result.scalar_one_or_none()
+    if show is None:
+        raise HTTPException(status_code=404, detail=f"No show found for slug '{slug}'")
+    return {
+        "id":          show.id,
+        "brand":       show.brand,
+        "city":        show.city,
+        "season":      show.season,
+        "total_looks": show.total_looks,
+        "show_date":   show.show_date.isoformat() if show.show_date else None,
+    }
+
+
+# ── Looks for a show ─────────────────────────────────────────────────────────
+
+@router.get("/shows/{show_id}/looks")
+async def get_show_looks(
+    show_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    All Look rows for a given show, ordered by look_number.
+    Returns image_url, look_number, materials, colors, color_names.
+    """
+    # Verify show exists
+    show_result = await db.execute(select(Show).where(Show.id == show_id))
+    show = show_result.scalar_one_or_none()
+    if show is None:
+        raise HTTPException(status_code=404, detail=f"Show {show_id} not found")
+
+    result = await db.execute(
+        select(Look)
+        .where(Look.show_id == show_id)
+        .order_by(Look.look_number)
+    )
+    looks = result.scalars().all()
+    return [
+        {
+            "id":          look.id,
+            "look_number": look.look_number,
+            "image_url":   look.image_url,
+            "materials":   look.materials or [],
+            "colors":      look.colors or [],
+            "color_names": look.color_names or [],
+        }
+        for look in looks
     ]
 
 
