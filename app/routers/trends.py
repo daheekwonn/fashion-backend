@@ -494,3 +494,18 @@ async def ingest_vogue(body: IngestVogueBody, db: AsyncSession = Depends(get_db)
     result["vogue_url"] = body.vogue_url
     result["images_scraped"] = len(image_urls)
     return result
+@router.get("/api/trends/image-proxy")
+async def image_proxy(url: str):
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    headers = {
+        "Referer": "https://www.vogue.com/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        response = await client.get(url, headers=headers)
+        return StreamingResponse(
+            response.aiter_bytes(),
+            media_type=response.headers.get("content-type", "image/jpeg")
+        )
