@@ -515,8 +515,19 @@ async def set_cover_image(show_id: int, body: dict, db: AsyncSession = Depends(g
         select(Look).where(Look.show_id == show_id).order_by(Look.look_number)
     )
     looks = result.scalars().all()
-    if not looks:
-        raise HTTPException(status_code=404, detail="No looks found for this show")
+    if looks:
+        looks[0].image_url = body["image_url"]
+    else:
+        new_look = Look(
+            show_id=show_id,
+            look_number=1,
+            image_url=body["image_url"],
+            materials=[],
+            colors=[],
+            color_names=[],
+            silhouettes=[]
+        )
+        db.add(new_look)
     looks[0].image_url = body["image_url"]
     await db.commit()
     return {"status": "updated", "show_id": show_id, "image_url": body["image_url"]}
