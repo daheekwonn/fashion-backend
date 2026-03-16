@@ -509,7 +509,7 @@ async def image_proxy(url: str):
             response.aiter_bytes(),
             media_type=response.headers.get("content-type", "image/jpeg")
         )
-@router.post("/api/trends/shows/{show_id}/cover-image")
+@router.post("/shows/{show_id}/cover-image")
 async def set_cover_image(show_id: int, body: dict, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Look).where(Look.show_id == show_id).order_by(Look.look_number)
