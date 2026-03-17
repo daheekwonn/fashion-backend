@@ -550,3 +550,35 @@ async def update_show_city(show_id: int, body: dict, db: AsyncSession = Depends(
     show.city = body["city"]
     await db.commit()
     return {"status": "updated", "show_id": show_id, "city": body["city"]}
+@router.post("/shows/{show_id}/looks")
+async def add_look(show_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Look).where(Look.show_id == show_id).order_by(Look.look_number.desc())
+    )
+    looks = result.scalars().all()
+    next_number = (looks[0].look_number + 1) if looks else 1
+    new_look = Look(
+        show_id=show_id,
+        look_number=body.get("look_number", next_number),
+        image_url=body["image_url"],
+        materials=[],
+        colors=[],
+        color_names=[],
+        silhouettes=[]
+    )
+    db.add(new_look)
+    await db.commit()
+    await db.refresh(new_look)
+    return {"status": "created", "id": new_look.id, "look_number": new_look.look_number}
+
+@router.delete("/shows/{show_id}/looks/{look_id}")
+async def delete_look(show_id: int, look_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Look).where(Look.id == look_id, Look.show_id == show_id)
+    )
+    look = result.scalar_one_or_none()
+    if not look:
+        raise HTTPException(status_code=404, detail="Look not found")
+    await db.delete(look)
+    await db.commit()
+    return {"status": "deleted", "id": look_id}
