@@ -531,3 +531,22 @@ async def set_cover_image(show_id: int, body: dict, db: AsyncSession = Depends(g
     looks[0].image_url = body["image_url"]
     await db.commit()
     return {"status": "updated", "show_id": show_id, "image_url": body["image_url"]}
+@router.get("/shows/covers")
+async def get_all_covers(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Show.id, Show.brand, Look.image_url)
+        .join(Look, Look.show_id == Show.id)
+        .where(Look.look_number == 1)
+        .order_by(Show.brand)
+    )
+    rows = result.all()
+    return [{"show_id": r[0], "brand": r[1], "cover_image": r[2]} for r in rows]
+@router.post("/shows/{show_id}/city")
+async def update_show_city(show_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Show).where(Show.id == show_id))
+    show = result.scalar_one_or_none()
+    if not show:
+        raise HTTPException(status_code=404, detail="Show not found")
+    show.city = body["city"]
+    await db.commit()
+    return {"status": "updated", "show_id": show_id, "city": body["city"]}
