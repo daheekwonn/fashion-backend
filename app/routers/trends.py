@@ -592,3 +592,15 @@ async def delete_all_looks(show_id: int, db: AsyncSession = Depends(get_db)):
         await db.delete(look)
     await db.commit()
     return {"status": "deleted", "count": len(looks)}
+@router.post("/shows/{show_id}/looks/reorder")
+async def reorder_looks(show_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    # body: { "look_ids": [id1, id2, id3, ...] } in desired order
+    for index, look_id in enumerate(body["look_ids"], start=1):
+        result = await db.execute(
+            select(Look).where(Look.id == look_id, Look.show_id == show_id)
+        )
+        look = result.scalar_one_or_none()
+        if look:
+            look.look_number = index
+    await db.commit()
+    return {"status": "reordered", "count": len(body["look_ids"])}
