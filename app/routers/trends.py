@@ -582,3 +582,13 @@ async def delete_look(show_id: int, look_id: int, db: AsyncSession = Depends(get
     await db.delete(look)
     await db.commit()
     return {"status": "deleted", "id": look_id}
+@router.delete("/shows/{show_id}/looks")
+async def delete_all_looks(show_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Look).where(Look.show_id == show_id)
+    )
+    looks = result.scalars().all()
+    for look in looks:
+        await db.delete(look)
+    await db.commit()
+    return {"status": "deleted", "count": len(looks)}
