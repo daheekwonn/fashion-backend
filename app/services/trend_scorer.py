@@ -188,7 +188,7 @@ async def _score_item(item: TrendItem) -> None:
         search_score = await get_search_score_for_keyword(keyword)
 
         # ── 3. Social score (0-100) ───────────────────────────────────────────
-        social_score = db_item.social_score or 0.0
+        social_score = get_social_velocity(db_item.name)
 
         # ── 4. Composite ─────────────────────────────────────────────────────
         composite = round(
