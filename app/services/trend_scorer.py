@@ -360,10 +360,11 @@ async def get_all_trends_with_breakdown(season: str = "FW26") -> list[dict]:
         for i, item in enumerate(items)
     ]
 def get_social_velocity(keyword: str) -> float:
-    """Combine Google News and Reddit signals for social score."""
+    """Use Google News as primary social signal, Reddit as secondary."""
     try:
         news = get_news_signal(keyword)
         reddit = get_reddit_signal(keyword)
-        return round((news + reddit) / 2, 2)
+        # Weight news 80%, Reddit 20% since Reddit API is unreliable
+        return round((news * 0.8) + (reddit * 0.2), 2)
     except Exception:
         return 0.0
