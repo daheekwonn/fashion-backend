@@ -629,3 +629,37 @@ async def refresh_look_counts(db: AsyncSession = Depends(get_db)):
         updated += 1
     await db.commit()
     return {"status": "updated", "shows_updated": updated}
+@router.post("/shows")
+async def create_show(body: dict, db: AsyncSession = Depends(get_db)):
+    from app.models.database import Show
+    # Check if show already exists
+    result = await db.execute(
+        select(Show).where(Show.brand == body.get("brand"))
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return {"status": "skipped", "id": existing.id, "brand": existing.brand}
+    
+    show = Show(
+        brand=body.get("brand"),
+        city=body.get("city", ""),
+        season=body.get("season", "FW26"),
+        total_looks=body.get("total_looks", 0),
+        show_score=body.get("show_score", 0.0),
+        cover_image=body.get("cover_image"),
+    )
+    db.add(show)
+    await db.commit()
+    await db.refresh(show)
+    return {"status": "created", "id": show.id, "brand": show.brand}
+
+@router.delete("/shows/{show_id}")
+async def delete_show(show_id: int, db: AsyncSession = Depends(get_db)):
+    from app.models.database import Show
+    result = await db.execute(select(Show).where(Show.id == show_id))
+    show = result.scalar_one_or_none()
+    if not show:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.delete(show)
+    await db.commit()
+    return {"status": "deleted", "id": show_id}
