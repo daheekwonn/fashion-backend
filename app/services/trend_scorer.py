@@ -1,3 +1,5 @@
+from app.services.news_trends import get_news_signal
+from app.services.reddit_trends import get_reddit_signal
 # app/services/trend_scorer.py
 #
 # Computes composite trend scores for TrendItems (broad categories)
