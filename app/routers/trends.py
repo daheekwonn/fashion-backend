@@ -604,3 +604,14 @@ async def reorder_looks(show_id: int, body: dict, db: AsyncSession = Depends(get
             look.look_number = index
     await db.commit()
     return {"status": "reordered", "count": len(body["look_ids"])}
+@router.patch("/shows/{show_id}/looks/{look_id}")
+async def update_look(show_id: int, look_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Look).where(Look.id == look_id, Look.show_id == show_id)
+    )
+    look = result.scalar_one_or_none()
+    if not look:
+        raise HTTPException(status_code=404, detail="Look not found")
+    look.image_url = body.get("image_url", look.image_url)
+    await db.commit()
+    return {"status": "updated", "id": look.id}
