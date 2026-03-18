@@ -19,3 +19,4 @@ tenacity==8.2.3
 aiosqlite==0.20.0
 playwright==1.41.0
 feedparser==6.0.11
+feedparser==6.0.11
