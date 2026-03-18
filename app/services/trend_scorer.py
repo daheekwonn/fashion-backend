@@ -22,6 +22,8 @@ from sqlalchemy.orm import selectinload
 from app.db.session import AsyncSessionLocal
 from app.models.database import TrendItem, TrendSubItem, TrendScore, Look, SearchSignal
 from app.services.search_trends import get_search_score_for_keyword
+from app.services.news_trends import get_news_signal
+from app.services.reddit_trends import get_reddit_signal
 
 logger = logging.getLogger(__name__)
 
@@ -357,3 +359,11 @@ async def get_all_trends_with_breakdown(season: str = "FW26") -> list[dict]:
         }
         for i, item in enumerate(items)
     ]
+def get_social_velocity(keyword: str) -> float:
+    """Combine Google News and Reddit signals for social score."""
+    try:
+        news = get_news_signal(keyword)
+        reddit = get_reddit_signal(keyword)
+        return round((news + reddit) / 2, 2)
+    except Exception:
+        return 0.0
