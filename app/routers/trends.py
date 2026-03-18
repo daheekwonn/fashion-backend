@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -615,3 +615,17 @@ async def update_look(show_id: int, look_id: int, body: dict, db: AsyncSession =
     look.image_url = body.get("image_url", look.image_url)
     await db.commit()
     return {"status": "updated", "id": look.id}
+@router.post("/shows/refresh-counts")
+async def refresh_look_counts(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Show))
+    shows = result.scalars().all()
+    updated = 0
+    for show in shows:
+        count_result = await db.execute(
+            select(func.count(Look.id)).where(Look.show_id == show.id)
+        )
+        count = count_result.scalar()
+        show.total_looks = count
+        updated += 1
+    await db.commit()
+    return {"status": "updated", "shows_updated": updated}
