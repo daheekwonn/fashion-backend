@@ -632,21 +632,23 @@ async def refresh_look_counts(db: AsyncSession = Depends(get_db)):
 @router.post("/shows")
 async def create_show(body: dict, db: AsyncSession = Depends(get_db)):
     from app.models.database import Show
-    # Check if show already exists
+
+    brand = body.get("brand", "")
+    season = body.get("season", "FW26")
+
+    # Check if already exists
     result = await db.execute(
-        select(Show).where(Show.brand == body.get("brand"))
+        select(Show).where(Show.brand == brand, Show.season == season)
     )
     existing = result.scalar_one_or_none()
     if existing:
         return {"status": "skipped", "id": existing.id, "brand": existing.brand}
-    
+
     show = Show(
-        brand=body.get("brand"),
+        brand=brand,
         city=body.get("city", ""),
-        season=body.get("season", "FW26"),
+        season=season,
         total_looks=body.get("total_looks", 0),
-        show_score=body.get("show_score", 0.0),
-        cover_image=body.get("cover_image"),
     )
     db.add(show)
     await db.commit()
