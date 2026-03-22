@@ -665,3 +665,33 @@ async def delete_show(show_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(show)
     await db.commit()
     return {"status": "deleted", "id": show_id}
+
+from pydantic import BaseModel
+
+class SocialScoresPayload(BaseModel):
+    scores: dict[str, float]  # { "Leather Outerwear": 45.2, ... }
+
+@router.post("/ingest/social")
+async def ingest_social_scores(
+    payload: SocialScoresPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Receive social scores from local runner script and write to DB.
+    Called by run_social_scores.py after computing Google News + Reddit signals.
+    """
+    from sqlalchemy import select, update
+    from app.models.database import TrendItem
+
+    updated = 0
+    for name, score in payload.scores.items():
+        result = await db.execute(
+            select(TrendItem).where(TrendItem.name == name)
+        )
+        item = result.scalars().first()
+        if item:
+            item.social_score = round(float(score), 2)
+            updated += 1
+
+    await db.commit()
+    return {"status": "ok", "updated": updated, "total": len(payload.scores)}
