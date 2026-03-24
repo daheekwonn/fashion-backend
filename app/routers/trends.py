@@ -612,9 +612,68 @@ async def update_look(show_id: int, look_id: int, body: dict, db: AsyncSession =
     look = result.scalar_one_or_none()
     if not look:
         raise HTTPException(status_code=404, detail="Look not found")
-    look.image_url = body.get("image_url", look.image_url)
+    # Update image URL if provided
+    if "image_url" in body:
+        look.image_url = body["image_url"]
+    # Update Vision tags if provided
+    if "materials" in body:
+        look.materials = body["materials"] or []
+    if "silhouettes" in body:
+        look.silhouettes = body["silhouettes"] or []
+    if "color_names" in body:
+        look.color_names = body["color_names"] or []
+    if "colors" in body:
+        look.colors = body["colors"] or []
+    if "raw_labels" in body:
+        look.raw_labels = body["raw_labels"] or []
     await db.commit()
     return {"status": "updated", "id": look.id}
+
+
+@router.post("/manual-tag")
+async def manual_tag_trend(body: dict, db: AsyncSession = Depends(get_db)):
+    """
+    Manually set runway_count and runway_show_count for a TrendItem.
+    Body: { "trend_name": "Leather Outerwear", "runway_count": 450, "runway_show_count": 38, "show_names": ["Gucci", "Saint Laurent"] }
+    """
+    trend_name = body.get("trend_name")
+    if not trend_name:
+        raise HTTPException(status_code=400, detail="trend_name required")
+
+    result = await db.execute(
+        select(TrendItem).where(TrendItem.name == trend_name)
+    )
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail=f"TrendItem '{trend_name}' not found")
+
+    item.runway_count = body.get("runway_count", item.runway_count)
+    item.runway_show_count = body.get("runway_show_count", item.runway_show_count)
+    await db.commit()
+    return {"status": "updated", "name": trend_name, "runway_count": item.runway_count, "runway_show_count": item.runway_show_count}
+
+
+@router.get("/items")
+async def get_all_trend_items(db: AsyncSession = Depends(get_db)):
+    """Return all TrendItems with current scores for the manual tagging admin UI."""
+    result = await db.execute(
+        select(TrendItem).where(TrendItem.season == "FW26").order_by(TrendItem.name)
+    )
+    items = result.scalars().all()
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "category": item.category,
+            "runway_count": item.runway_count or 0,
+            "runway_show_count": item.runway_show_count or 0,
+            "runway_score": item.runway_score or 0,
+            "search_score": item.search_score or 0,
+            "social_score": item.social_score or 0,
+            "trend_score": item.trend_score or 0,
+        }
+        for item in items
+    ]
 @router.post("/shows/refresh-counts")
 async def refresh_look_counts(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Show))
