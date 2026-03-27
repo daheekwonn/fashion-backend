@@ -754,3 +754,71 @@ async def ingest_social_scores(
 
     await db.commit()
     return {"status": "ok", "updated": updated, "total": len(payload.scores)}
+
+@router.post("/items/create")
+async def create_trend_item(body: dict, db: AsyncSession = Depends(get_db)):
+    """Create a new TrendItem."""
+    from app.models.database import TrendItem
+    name = body.get("name", "").strip()
+    category = body.get("category", "").strip()
+    if not name or not category:
+        raise HTTPException(status_code=400, detail="name and category required")
+    # Check duplicate
+    existing = await db.execute(select(TrendItem).where(TrendItem.name == name))
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail=f"Trend '{name}' already exists")
+    item = TrendItem(
+        name=name,
+        category=category,
+        season=body.get("season", "FW26"),
+        runway_count=0,
+        runway_show_count=0,
+        runway_score=0.0,
+        search_score=0.0,
+        social_score=0.0,
+        trend_score=0.0,
+        trend_delta=0.0,
+        is_rising=False,
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return {"status": "created", "id": item.id, "name": item.name, "category": item.category}
+
+
+@router.patch("/items/{item_id}")
+async def update_trend_item(item_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    """Rename a TrendItem or change its category."""
+    from app.models.database import TrendItem
+    result = await db.execute(select(TrendItem).where(TrendItem.id == item_id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="TrendItem not found")
+    if "name" in body and body["name"].strip():
+        item.name = body["name"].strip()
+    if "category" in body and body["category"].strip():
+        item.category = body["category"].strip()
+    await db.commit()
+    return {"status": "updated", "id": item.id, "name": item.name, "category": item.category}
+
+
+@router.delete("/items/{item_id}")
+async def delete_trend_item(item_id: int, db: AsyncSession = Depends(get_db)):
+    """Delete a TrendItem and all its sub-items and score history."""
+    from app.models.database import TrendItem, TrendSubItem, TrendScore
+    # Delete scores
+    scores = await db.execute(select(TrendScore).where(TrendScore.item_id == item_id))
+    for s in scores.scalars().all():
+        await db.delete(s)
+    # Delete sub-items
+    subs = await db.execute(select(TrendSubItem).where(TrendSubItem.parent_id == item_id))
+    for s in subs.scalars().all():
+        await db.delete(s)
+    # Delete item
+    result = await db.execute(select(TrendItem).where(TrendItem.id == item_id))
+    item = result.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="TrendItem not found")
+    await db.delete(item)
+    await db.commit()
+    return {"status": "deleted", "id": item_id}
