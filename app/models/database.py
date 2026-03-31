@@ -52,6 +52,7 @@ class Look(Base):
     sub_item_tags = Column(ARRAY(String), default=list)
     vision_raw   = Column(JSON, default=dict)
     tagged_at    = Column(DateTime(timezone=True), nullable=True)
+    manual_tags  = Column(Text, nullable=True)  # comma-separated e.g. "leather, black, oversized jacket"
 
     show = relationship("Show", back_populates="looks")
 

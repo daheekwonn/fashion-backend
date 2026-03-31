@@ -725,9 +725,43 @@ async def delete_show(show_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "deleted", "id": show_id}
 
-from pydantic import BaseModel
 
-class SocialScoresPayload(BaseModel):
+
+# ── Manual look tagging endpoint ──────────────────────────────────────────────
+
+class ManualTagsUpdate(BaseModel):
+    manual_tags: Optional[str] = None
+
+
+@router.patch("/shows/{show_id}/looks/{look_id}/manual-tags")
+async def update_look_manual_tags(
+    show_id: int,
+    look_id: int,
+    body: ManualTagsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Save manual tags for a single look.
+    Manual tags take priority over Vision tags in scoring.
+    Body: { "manual_tags": "leather, black, oversized jacket" }
+    """
+    result = await db.execute(
+        select(Look).where(Look.id == look_id, Look.show_id == show_id)
+    )
+    look = result.scalar_one_or_none()
+    if not look:
+        raise HTTPException(status_code=404, detail="Look not found")
+
+    look.manual_tags = body.manual_tags
+    await db.commit()
+    await db.refresh(look)
+
+    return {
+        "id":           look.id,
+        "look_number":  look.look_number,
+        "manual_tags":  look.manual_tags,
+        "status":       "updated",
+    }
     scores: dict[str, float]  # { "Leather Outerwear": 45.2, ... }
 
 @router.post("/ingest/social")
@@ -822,3 +856,67 @@ async def delete_trend_item(item_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(item)
     await db.commit()
     return {"status": "deleted", "id": item_id}
+
+
+class SocialScoresPayload(BaseModel):
+    scores: dict  # { "Leather Outerwear": 45.2, ... }
+
+
+@router.post("/ingest/social")
+async def ingest_social_scores(
+    payload: SocialScoresPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Receive social scores from local runner script and write to DB.
+    Called by run_social_scores.py after computing Google News + Reddit signals.
+    """
+    updated = 0
+    for name, score in payload.scores.items():
+        result = await db.execute(
+            select(TrendItem).where(TrendItem.name == name)
+        )
+        item = result.scalars().first()
+        if item:
+            item.social_score = round(float(score), 2)
+            updated += 1
+
+    await db.commit()
+    return {"status": "ok", "updated": updated, "total": len(payload.scores)}
+
+
+# ── Manual look tagging endpoint ──────────────────────────────────────────────
+
+class ManualTagsUpdate(BaseModel):
+    manual_tags: Optional[str] = None
+
+
+@router.patch("/shows/{show_id}/looks/{look_id}/manual-tags")
+async def update_look_manual_tags(
+    show_id: int,
+    look_id: int,
+    body: ManualTagsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Save manual tags for a single look.
+    Manual tags take priority over Vision tags in scoring.
+    Body: { "manual_tags": "leather, black, oversized jacket" }
+    """
+    result = await db.execute(
+        select(Look).where(Look.id == look_id, Look.show_id == show_id)
+    )
+    look = result.scalar_one_or_none()
+    if not look:
+        raise HTTPException(status_code=404, detail="Look not found")
+
+    look.manual_tags = body.manual_tags
+    await db.commit()
+    await db.refresh(look)
+
+    return {
+        "id":          look.id,
+        "look_number": look.look_number,
+        "manual_tags": look.manual_tags,
+        "status":      "updated",
+    }

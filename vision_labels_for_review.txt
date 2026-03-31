@@ -1,0 +1,341 @@
+Vision Labels Found Across All Looks
+============================================================
+
+person                              5586
+fashion model                       5354
+fashion show                        5185
+shoe                                4961
+model                               4843
+fashion design                      4780
+fashion                             4565
+runway                              4522
+haute couture                       3818
+waist                               3802
+outerwear                           2609
+textile                             2558
+pants                               2552
+public event                        2528
+footwear                            2501
+top                                 2278
+coat                                1893
+one-piece garment                   1837
+dress                               1714
+event                               1680
+boot                                1510
+high heels                          1475
+sleeve                              1395
+day dress                           1383
+handbag                             1278
+high-heeled shoe                    1274
+clothing                            1256
+sandal                              1202
+long hair                           1127
+overcoat                            1066
+bag                                 1055
+ankle                               1054
+skirt                               1002
+collar                              842
+jacket                              823
+fur                                 799
+knee                                739
+belt                                738
+torso                               732
+neck                                704
+costume design                      693
+pocket                              628
+design                              603
+leather                             596
+blond                               583
+hat                                 580
+thigh                               574
+formal wear                         511
+sunglasses                          500
+fur clothing                        493
+black                               405
+shoulder                            388
+costume                             364
+cocktail dress                      363
+winter                              361
+brown hair                          360
+leg                                 350
+button                              335
+beauty                              326
+scarf                               311
+denim                               309
+calf                                294
+animal product                      290
+gown                                285
+jeans                               245
+audience                            242
+blazer                              241
+suit trousers                       225
+luggage & bags                      211
+flooring                            203
+trousers                            200
+embellishment                       200
+standing                            195
+miniskirt                           191
+foot                                179
+natural material                    176
+human body                          170
+abdomen                             169
+necklace                            167
+leather jacket                      163
+fedora                              160
+gothic fashion                      151
+dress shirt                         148
+ruffle                              147
+knee-high boot                      138
+wool                                138
+red                                 138
+duster                              126
+plaid                               125
+sheath dress                        122
+tartan                              120
+sun hat                             119
+woolen                              115
+brown                               113
+shirt                               113
+shorts                              109
+bridal party dress                  107
+strapless dress                     107
+wrap                                106
+hairstyle                           105
+glove                               94
+pantsuit                            92
+grey                                85
+pink                                84
+headgear                            84
+trench coat                         83
+silk                                73
+tights                              71
+hip                                 71
+velvet                              69
+lace                                64
+frock coat                          63
+little black dress                  62
+photo shoot                         61
+hood                                60
+sock                                58
+makeover                            54
+head                                51
+cape                                50
+leggings                            47
+khaki pants                         46
+dress shoe                          45
+see-through clothing                44
+goggles                             39
+glasses                             39
+court shoe                          33
+yellow                              33
+picture frame                       32
+hair                                29
+cloak                               29
+satin                               28
+camouflage                          27
+tuxedo                              27
+tie                                 27
+carpet                              26
+tradition                           25
+performing arts                     25
+suit                                25
+active pants                        25
+vintage clothing                    24
+sleeveless shirt                    24
+military camouflage                 23
+thorax                              23
+wallet                              22
+cardigan                            22
+latex clothing                      22
+face                                21
+stole                               20
+evening glove                       20
+pattern                             20
+crowd                               20
+performance                         20
+floor                               19
+brassiere                           18
+bridal clothing                     18
+underpants                          18
+stocking                            17
+crop top                            17
+silver                              17
+beanie                              16
+undergarment                        16
+shoulder bag                        15
+furniture                           15
+snow                                15
+purple                              15
+riding boot                         14
+stool                               14
+blue                                14
+a-line                              13
+red carpet                          13
+parka                               13
+cargo pants                         13
+windbreaker                         13
+table                               13
+latex                               12
+cap                                 12
+car                                 12
+black hair                          11
+muscle                              11
+orange                              11
+shawl                               10
+bow tie                             10
+lingerie                            10
+vision care                         10
+bermuda shorts                      10
+robe                                9
+military uniform                    9
+eyewear                             9
+poncho                              9
+lingerie top                        9
+pencil skirt                        9
+zipper                              9
+satchel                             9
+workwear                            9
+curtain                             8
+stomach                             8
+toy                                 8
+bed                                 8
+layered hair                        7
+polka dot                           7
+freezing                            7
+sneakers                            7
+bra                                 6
+hoop skirt                          6
+retail                              6
+knit cap                            5
+premiere                            5
+white-collar worker                 5
+wedding dress                       5
+headpiece                           5
+barechestedness                     5
+turban                              5
+backpack                            5
+suede                               5
+fashion illustration                5
+door                                5
+lighting                            5
+night                               4
+theatre                             4
+creative arts                       4
+umbrella                            4
+plus-size model                     4
+doll                                4
+flat cap                            4
+fetish model                        4
+stage                               3
+jheri curl                          3
+afro                                3
+embroidery                          3
+sweater                             3
+skort                               3
+strap                               3
+navel                               3
+military person                     3
+soldier                             3
+art model                           3
+raincoat                            3
+entertainment                       3
+dance                               3
+sportswear                          3
+chair                               3
+active shorts                       3
+flower                              2
+theater                             2
+child                               2
+cosplay                             2
+mechanical fan                      2
+mannequin                           2
+swimwear                            2
+tire                                2
+shopping                            2
+briefs                              2
+military                            2
+army                                2
+bowtie                              2
+cowboy hat                          2
+helmet                              2
+victorian fashion                   2
+uniform                             2
+active undergarment                 2
+formal gloves                       2
+performance art                     2
+acting                              2
+overall                             2
+feathered hair                      2
+gold                                2
+facial hair                         2
+ear                                 2
+sitting                             2
+comfort                             2
+pillow                              2
+couch                               2
+flowering plant                     1
+petal                               1
+necktie                             1
+wig                                 1
+pantyhose                           1
+drink                               1
+flesh                               1
+pedestrian                          1
+walking                             1
+sport utility vehicle               1
+monokini                            1
+wheelchair                          1
+wheel                               1
+dog                                 1
+pet supply                          1
+canidae                             1
+hobo bag                            1
+bikini                              1
+swimsuit                            1
+swimsuit top                        1
+swimsuit bottom                     1
+figurine                            1
+kilt                                1
+marines                             1
+infantry                            1
+military organization               1
+people                              1
+hall                                1
+peaked cap                          1
+precipitation                       1
+feather                             1
+baggage                             1
+retro style                         1
+motif                               1
+tripod                              1
+vest                                1
+bun                                 1
+synthetic rubber                    1
+neo-burlesque                       1
+drama                               1
+concert dance                       1
+modern dance                        1
+choreography                        1
+barefoot                            1
+baseball glove                      1
+window                              1
+sports fan jersey                   1
+sports uniform                      1
+jersey                              1
+boardshorts                         1
+trunks                              1
+beard                               1
+ball                                1
+high and tight                      1
+crew cut                            1
+bangs                               1
+woodland                            1
+old-growth forest                   1
+guitar                              1
+toe                                 1
+animal sports                       1
+horse                               1
+animal                              1
+white                               1
+elbow                               1
+light fixture                       1

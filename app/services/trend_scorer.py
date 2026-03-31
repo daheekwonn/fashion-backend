@@ -64,11 +64,34 @@ TREND_KEYWORDS = {
 }
 
 
-# ── Count looks per trend from Vision tags ────────────────────────────────────
+# ── Count looks per trend from tags ──────────────────────────────────────────
+
+def _get_look_labels(look) -> list:
+    """
+    Get all tags for a look. Manual tags take priority; Vision tags fill gaps.
+    Manual tags are a comma-separated string e.g. "leather, black, oversized jacket".
+    """
+    labels = []
+
+    # Manual tags take priority — parse comma-separated string
+    if look.manual_tags:
+        manual = [t.strip().lower() for t in look.manual_tags.split(",") if t.strip()]
+        labels.extend(manual)
+
+    # Vision tags always included — scorer deduplicates via set
+    if look.materials:
+        labels.extend([t.lower() for t in look.materials])
+    if look.silhouettes:
+        labels.extend([t.lower() for t in look.silhouettes])
+    if look.color_names:
+        labels.extend([t.lower() for t in look.color_names])
+
+    return list(set(labels))
+
 
 async def _count_looks_per_trend(session) -> dict:
     """
-    Count Look rows whose Vision tags (materials, silhouettes, color_names)
+    Count Look rows whose tags (manual first, Vision as fallback)
     match each TrendItem's keywords. Returns dict of:
         { trend_name: { "count": int, "show_count": int } }
     """
@@ -78,18 +101,11 @@ async def _count_looks_per_trend(session) -> dict:
     counts = {name: {"count": 0, "shows": set()} for name in TREND_KEYWORDS}
 
     for look in looks:
-        # Build a single lowercased string of all tags for this look
-        all_tags = []
-        if look.materials:
-            all_tags.extend([t.lower() for t in look.materials])
-        if look.silhouettes:
-            all_tags.extend([t.lower() for t in look.silhouettes])
-        if look.color_names:
-            all_tags.extend([t.lower() for t in look.color_names])
-
-        tags_str = " ".join(all_tags)
-        if not tags_str.strip():
+        labels = _get_look_labels(look)
+        if not labels:
             continue
+
+        tags_str = " ".join(labels)
 
         for trend_name, keywords in TREND_KEYWORDS.items():
             if any(kw.lower() in tags_str for kw in keywords):
