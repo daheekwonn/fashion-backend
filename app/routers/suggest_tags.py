@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter()
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+# Client is initialised per-request so a missing key doesn't crash startup
 
 PROMPT = """You are tagging runway looks for a fashion trend intelligence platform.
 Analyse this runway image carefully and return specific, descriptive fashion tags.
@@ -29,6 +29,7 @@ async def suggest_tags(body: SuggestTagsRequest):
         raise HTTPException(status_code=400, detail="image_url required")
 
     try:
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=200,
