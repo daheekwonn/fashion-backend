@@ -78,3 +78,6 @@ async def root():
         "version": "1.0.0",
         "docs":    "/docs",
     }
+
+from app.routers.suggest_tags import router as suggest_tags_router
+app.include_router(suggest_tags_router)
