@@ -762,6 +762,8 @@ async def update_look_manual_tags(
         "manual_tags":  look.manual_tags,
         "status":       "updated",
     }
+
+class SocialScoresPayload(BaseModel):
     scores: dict[str, float]  # { "Leather Outerwear": 45.2, ... }
 
 @router.post("/ingest/social")
